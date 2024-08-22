@@ -13,7 +13,7 @@ from torch.distributions.dirichlet import Dirichlet
 from torch.distributions.kl import kl_divergence
 
 class Agent:
-    def __init__(self, id=None, beta_1=1, decay=0.99, game_matrix=None):
+    def __init__(self, id=None, game_matrix=None, beta_1=1, decay=0.99, dynamic_precision=False):
 
         # ========================================
         # Attributes
@@ -24,6 +24,7 @@ class Agent:
         self.beta_0 = 1.0  # beta in Gamma distribution (stays fixed)
         self.beta_1 = beta_1  # alpha in Gamma distribution (sets the prior precision mean)
         self.gamma = self.beta_1 / self.beta_0
+        self.dynamic_precision = dynamic_precision  # Enables precision updating
         self.decay = decay  # Forgetting rate for learning
 
         # Generative model hyperparameters
@@ -374,7 +375,8 @@ class Agent:
 
         self.action = torch.multinomial(q_pi, 1).item()
 
-        self.update_precision(EFE, q_pi)
+        if self.dynamic_precision:
+            self.update_precision(EFE, q_pi)
         self.q_pi = q_pi
         return self.action
 
@@ -383,7 +385,7 @@ class Agent:
         self.expected_EFE = [torch.dot(q_pi, EFE).item()]
         
         # Update gamma (the precision) based on the expected EFE
-        # self.gamma = self.beta_1 / (self.beta_0 - self.expected_EFE[0])
+        self.gamma = self.beta_1 / (self.beta_0 - self.expected_EFE[0])
         
         return self.gamma
 
