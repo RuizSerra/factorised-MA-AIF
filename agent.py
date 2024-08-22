@@ -1,0 +1,408 @@
+'''
+Factorised Active Inference Agent
+
+Authors: Jaime Ruiz Serra, Patrick Sweeney, Mike Harré
+Date: 2024-07
+'''
+
+import torch
+import random
+import numpy as np
+import torch.nn.functional as F
+from torch.distributions.dirichlet import Dirichlet
+from torch.distributions.kl import kl_divergence
+
+class Agent:
+    def __init__(self, id=None, beta_1=1, decay=0.99, game_matrix=None):
+
+        # ========================================
+        # Attributes
+        # =======================================
+        self.id = id
+        
+        # Learning parameters
+        self.beta_0 = 1.0  # beta in Gamma distribution (stays fixed)
+        self.beta_1 = beta_1  # alpha in Gamma distribution (sets the prior precision mean)
+        self.gamma = self.beta_1 / self.beta_0
+        self.decay = decay  # Forgetting rate for learning
+
+        # Generative model hyperparameters
+        self.game_matrix = game_matrix  # Rewards from row player's perspective
+        # self.game_matrix = (game_matrix / game_matrix.sum()) #Input probabilities instead instead of log rewards?
+        num_actions = game_matrix.shape[0]  # Number of actions (assuming symmetrical actions)
+        num_agents = game_matrix.ndim  # Number of players (rank of game tensor)
+
+        # Generative model/variational posterior parameters
+        self.alpha = [torch.ones(num_actions) for _ in range(num_agents)]  # Dirichlet state prior
+        self.A = [torch.eye(num_actions) for _ in range(num_agents)]  # Identity observation model
+        self.B = lambda s, u: s  # Identity transition model (given s and u, return s)
+        self.log_C = game_matrix  # Payoffs for joint actions (in matrix form, from row player's perspective)
+        self.prob_C = None
+        self.s = [Dirichlet(alpha).mean for alpha in self.alpha]  # Categorical state prior (D?)
+        self.E = torch.ones(num_actions) / num_actions  # Habits 
+
+        # self.A_params = torch.eye(2)
+        # self.B_params = torch.tensor([torch.eye(2), torch.eye(2)])
+        # Opponent modeling (what I think their preferences are, currently unused - no learning)
+        # self.C_opp_params = self.log_C.T.clone().detach()    ### <--------------- TEST transpose log_C as if ego knew exactly alters preferences
+        self.C_opp_params = torch.ones_like(self.log_C)    ### <--------------- TEST uniform prior for opponent preferences
+        
+        # Values for t = 0, plus resetting each timestep
+        self.action = torch.multinomial(self.E, 1).item()  # Starting action randomly sampled according to habits
+        self.VFE = [None] * num_agents  # Variational Free Energy for each agent (state factor)
+        self.accuracy = [None] * num_agents
+        self.complexity = [None] * num_agents
+        self.energy = [None] * num_agents
+        self.entropy = [None] * num_agents
+        self.EFE = torch.zeros(num_actions)  # EFE for each possible action
+        self.ambiguity = torch.zeros(num_actions) #for each possible action
+        self.risk = torch.zeros(num_actions) #for each possible action
+        self.salience = torch.zeros(num_actions) #for each possible action
+        self.pragmatic_value = torch.zeros(num_actions)
+        self.novelty = torch.zeros(num_actions)
+
+        self.expected_EFE = [None]  # Expected EFE averaged over my expected 
+
+
+    # ========================================
+    # Summaries
+    # =======================================
+
+    def __repr__(self):
+        return (f"Agent(id={self.id!r}, beta_1={self.beta_1}, decay={self.decay}, "
+                f"gamma={self.gamma:.3f}, game_matrix_shape={self.game_matrix.shape}, "
+                f"action={self.action}, VFE={self.VFE}, expected_EFE={self.expected_EFE})")
+
+    def __str__(self):
+        # Function to format a tensor for readable output
+        def format_tensor(tensor):
+            # Recursively formats the tensor depending on its number of dimensions
+            if tensor.dim() == 1:
+                # If 1D, format the elements directly
+                return '\t'.join([f'{item:.2f}' for item in tensor])
+            else:
+                # If multi-dimensional, apply the formatting to each slice along the first dimension
+                return '\n'.join([format_tensor(tensor_slice) for tensor_slice in tensor])
+
+        # Format the game matrix and opponent model parameters
+        formatted_game_matrix = format_tensor(self.log_C)
+        formatted_opponent_params = format_tensor(self.C_opp_params)
+
+        # Format the state priors as percentages, with labels for each state factor
+        formatted_state_priors = [
+            f"State Factor {i + 1} Estimate: {', '.join([f'{prob * 100:.2f}%' for prob in state])}"
+            for i, state in enumerate(self.s)
+        ]
+
+        total_vfe = sum(vfe for vfe in self.VFE if vfe is not None)
+        total_accuracy = sum(acc for acc in self.accuracy if acc is not None)
+        total_complexity = sum(comp for comp in self.complexity if comp is not None)
+        total_energy = sum(en for en in self.energy if en is not None)
+        total_entropy = sum(ent for ent in self.entropy if ent is not None)
+
+        # Format the VFE values to 2 decimal places
+        formatted_VFE = [f'{vfe:.2f}' if vfe is not None else 'None' for vfe in self.VFE]
+
+        # Format the expected EFE values to 2 decimal places
+        formatted_expected_EFE = [f'{efe:.2f}' if efe is not None else 'None' for efe in self.expected_EFE]
+
+        # Format the EFE values per action to 2 decimal places
+        formatted_EFE = [f'{efe:.2f}' for efe in self.EFE]
+
+        # Format the additional per action metrics (ambiguity, risk, salience, pragmatic value)
+        formatted_ambiguity = [f'{amb:.2f}' for amb in self.ambiguity]
+        formatted_risk = [f'{risk:.2f}' for risk in self.risk]
+        formatted_salience = [f'{sal:.2f}' for sal in self.salience]
+        formatted_pragmatic_value = [f'{pv:.2f}' for pv in self.pragmatic_value]
+
+
+
+        summary = (f"Agent ID: {self.id}\n"
+                f"Gamma: {self.gamma:.3f}\n"
+                f"Gamma Hyperparameters: beta=1.0, alpha={self.beta_1}\n"
+                f"Opponent Learning Decay: {self.decay}\n"
+                f"Current Action: {self.action}\n"
+                f"Log C (Payoffs):\n{formatted_game_matrix}\n"
+                f"{', '.join(formatted_state_priors)}\n"  # Join the state estimates on a single line
+                f"Habits E: {', '.join([f'{prob * 100:.2f}%' for prob in self.E])}\n"
+                f"Log C Opp Params (ToM Payoffs):\n{formatted_opponent_params}\n"
+
+                f"Total Variational Free Energy (VFE): {total_vfe:.2f}, Per Factor: {', '.join(formatted_VFE)}\n"
+                f"Accuracy: {total_accuracy:.2f}\n"
+                f"Complexity: {total_complexity:.2f}\n"
+                f"Energy: {total_energy:.2f}\n"
+                f"Entropy: {total_entropy:.2f}\n"
+
+                f"Expected EFE: {', '.join(formatted_expected_EFE)} (Per Action: {', '.join(formatted_EFE)})\n"
+                f"Ambiguity: {', '.join(formatted_ambiguity)}\n"
+                f"Risk: {', '.join(formatted_risk)}\n"
+                f"Salience: {', '.join(formatted_salience)}\n"
+                f"Pragmatic Value: {', '.join(formatted_pragmatic_value)}")
+
+        return summary
+
+    # ========================================
+    # Perception 
+    # =======================================
+    def infer_state(self, o, learning_rate=1e-2, num_iterations=100, num_samples=100):
+        for factor_idx in range(len(self.s)):  # Loop over each state factor (me + the other agents)
+            s_prev = self.s[factor_idx].clone().detach()  # State t-1
+            log_prior = torch.log(self.B(s_prev, self.action) + 1e-9)  # New prior is old posterior
+            log_likelihood = torch.log(self.A[factor_idx] @ o[factor_idx] + 1e-9)  # Probability of observation given hidden states
+
+            variational_params = self.alpha[factor_idx].clone().detach().requires_grad_(True)  # Variational Dirichlet distribution for each factor (agent)
+            optimizer = torch.optim.Adam([variational_params], lr=learning_rate)
+
+            for _ in range(num_iterations):
+                optimizer.zero_grad()
+
+                s_samples = Dirichlet(variational_params).rsample((num_samples,))  # Variational dist samples
+                log_s = torch.log(s_samples + 1e-9)  # Log variational dist samples
+                vfe_samples = torch.sum(s_samples * (log_s - log_likelihood - log_prior), dim=-1) 
+                VFE = vfe_samples.mean()
+
+                entropy = -1 * torch.sum(s_samples * log_s, dim=-1).mean()
+                energy = -1 * torch.sum(s_samples * (log_prior + log_likelihood), dim=-1).mean()
+                accuracy = torch.sum(s_samples * (log_likelihood), dim=-1).mean()
+                complexity = (-1 * torch.sum(s_samples * (log_prior), dim=-1).mean()) - entropy
+
+                VFE.backward()
+                optimizer.step()
+                variational_params.data.clamp_(min=1e-3)
+
+            self.alpha[factor_idx] = variational_params.detach()
+            self.s[factor_idx] = Dirichlet(variational_params).mean.detach()
+            self.VFE[factor_idx] = VFE.detach()
+            
+            self.entropy[factor_idx] = entropy
+            self.energy[factor_idx] = energy
+            self.accuracy[factor_idx] = accuracy
+            self.complexity[factor_idx] = complexity
+
+        return self.s
+
+    # ========================================
+    # Action 
+    # =======================================
+    def compute_efe(self):
+        num_actions = self.E.shape[0]  # Scalar (number of actions)
+        EFE = torch.zeros(num_actions)  # n-action length vector of zeros
+        ambiguity = torch.zeros(num_actions)  # n-action length vector of zeros
+        risk = torch.zeros(num_actions)  # n-action length vector of zeros
+        salience = torch.zeros(num_actions)  # n-action length vector of zeros
+        pragmatic_value = torch.zeros(num_actions)  # n-action length vector of zeros
+        novelty = torch.zeros(num_actions)  # n-action length vector of zeros
+
+        n_agents = self.C_opp_params.dim()  # Number of agents (including self)
+        # print(f'n-agents: {n_agents}')
+
+        # For each action
+        for action in torch.arange(num_actions):
+            # For each factor, the expected value is the value of the states (log C), multiplied by the action probabilities of the opponent
+            for factor_idx in range(len(self.s)):
+                H = -torch.diag(self.A[factor_idx] @ torch.log(self.A[factor_idx] + 1e-9))  # Conditional (pseudo?) entropy (of the generated emissions matrix) - ZERO
+                # print(f'H: {H}')
+                
+                ### ==== MY PREFERENCES OVER MY ACTIONS === ### -  [What I wish to observe me doing, given what I expect they will do]
+                if factor_idx == 0:  
+                    # PPS (me)
+                    s_pred = self.B(self.s[factor_idx], action)  # Predicted state q(s | s, u)
+                    # print(f's pred me: {s_pred}')
+                    # o_pred = self.A[factor_idx] @ s_pred
+                    
+                    # PPS (opponent)
+                    expected_probs = self.C_opp_params / self.C_opp_params.sum(dim=list(range(1, n_agents)), keepdim=True)   # p(u_j, u_k | u_i)
+
+                    # if n_agents == 2:  # Special case for 2-player scenario
+                    #     s_pred_opponents = expected_probs[action].squeeze()
+                    # else:
+                    #     s_pred_opponents = []
+
+                    #     for opponent_idx in range(1, n_agents):  # Loop over each opponent (skip self-action)
+                    #         s_pred_opponent = expected_probs[action].clone()  # Conditioning on my action
+
+                    #         # Sum over all other opponents' actions to marginalize out their influence
+                    #         for dim in range(n_agents - 1):  # Sum over dimensions 0 and 1 (after conditioning on action)
+                    #             if dim != opponent_idx - 1:  # Only skip the current opponent's dimension
+                    #                 s_pred_opponent = s_pred_opponent.sum(dim=dim, keepdim=True)
+
+                    #         s_pred_opponent = s_pred_opponent.squeeze()  # Remove extra dimensions
+                    #         s_pred_opponent /= s_pred_opponent.sum()  # Normalize to get a probability distribution
+
+                    #         # Append the result to the list
+                    #         s_pred_opponents.append(s_pred_opponent)
+
+                    #     # Stack all predicted actions for all opponents
+                    #     s_pred_opponents = torch.stack(s_pred_opponents)
+
+# #                    assert log_C.size(1) == s_pred_opponents.size(0), "Dimension mismatch between log_C and s_pred_opponent"
+                    
+#                     # print(f'n-agents: {n_agents}')
+#                     if n_agents == 2:  # Special case for 2 players
+#                         log_C_modality = self.log_C @ s_pred_opponents  # Matrix multiplication
+#                     else:
+#                         # Perform tensor dot product over all opponent dimensions
+#                         log_C_modality = torch.tensordot(self.log_C, s_pred_opponents, dims=(list(range(1, n_agents)), list(range(n_agents - 1))))
+
+                    
+                    # Indices for tensor dot product
+                    indices_left = list(range(1, n_agents))     # [1, ..., n-1]
+                    indices_right = list(range(n_agents - 1))   # [0, ..., n-2]
+                    
+                    log_C_modality = torch.tensordot(
+                        self.log_C,  # (2, 2, 2)
+                        expected_probs[action],  # (2, 2)
+                        dims=(indices_left, indices_right)
+                    )
+                    
+                    # print(f'Log C Modality (me - smol) (Action {action}, Factor {factor_idx}): {log_C_modality} - only look at the relevant action element?')
+
+
+                    #####################
+
+         
+                ### ==== MY PREFERENCES OVER THEIR ACTIONS === [what I’d wish to observe them doing, were I to do action u, given my model of their preferences]
+                else:  
+
+                    # # PPS (them) is conditioned on all other agents actions (n-player case)
+                    n_agents = self.C_opp_params.dim()  # Number of agents (including self)
+
+                    # Normalize C_opp_params across joint actions to get the expected probabilities
+                    expected_probs = self.C_opp_params / self.C_opp_params.sum(dim=list(range(1, n_agents)), keepdim=True)  # p(u_{-i} | u_i)
+
+                    # Marginalise out the current factor agent to get expected probs for all other agents (not i, not j)
+                    if n_agents == 2:
+                        expected_probs_marginal = expected_probs
+                    else:
+                        expected_probs_marginal = expected_probs.sum(dim=factor_idx, keepdim=True)  # p(u_{-j-i}|u_i) = sum_{u_j} p(u_{-i} | u_i)
+
+                    # Indices for tensor dot product
+                    indices_left = list(range(n_agents-1))      # [0, ..., n-2]
+                    indices_left.remove(factor_idx-1)           # Remove the current factor index  [1, ..., n-1] \ j
+                    
+                    indices_right = list(range(n_agents - 2))   # [0, ..., n-3]  because we've removed both i (ego; conditional) and j (current factor; marginalised)
+
+                    # print('For factor', factor_idx)
+                    # print('indices', indices_left, indices_right)
+                    # print('expected probs marginal', expected_probs_marginal, expected_probs_marginal.shape)
+                    # print('log_C[action]', self.log_C[action], self.log_C[action].shape)
+                    
+                    log_C_modality = torch.tensordot(
+                        self.log_C[action], # (2, 2)
+                        expected_probs_marginal[action].squeeze(),   # (2,)
+                        dims=(indices_left, indices_right)
+                    )
+
+                    # s_pred = expected_probs.sum(dim=indices_right)[action]
+                    s_pred = expected_probs_marginal[action].squeeze()
+
+                    # print(factor_idx, log_C_modality)
+
+                    # if n_agents == 2:  # Special case for 2-player scenario
+                    #     s_pred_opponents = expected_probs[action].squeeze()
+                    # else:
+                    #     s_pred_opponents = []
+
+                    #     for opponent_idx in range(1, n_agents):  # Loop over each opponent (skip self-action)
+                    #         s_pred_opponent = expected_probs[action].clone()  # Conditioning on my action
+
+                    #         # Sum over all other opponents' actions to marginalize out their influence
+                    #         for dim in range(n_agents - 1):  # Sum over dimensions 0 and 1 (after conditioning on action)
+                    #             if dim != opponent_idx - 1:  # Only skip the current opponent's dimension
+                    #                 s_pred_opponent = s_pred_opponent.sum(dim=dim, keepdim=True)
+
+                    #         s_pred_opponent = s_pred_opponent.squeeze()  # Remove extra dimensions
+                    #         s_pred_opponent /= s_pred_opponent.sum()  # Normalize to get a probability distribution
+
+                    #         # Append the result to the list
+                    #         s_pred_opponents.append(s_pred_opponent)
+
+                    #     # Stack all predicted actions for all opponents
+                    #     s_pred = torch.stack(s_pred_opponents)
+                    #     # print(f's pred them: {s_pred}')
+
+
+                    #################### n-agent
+
+                    #My preferences over joint states don't change
+                    # log_C_opp = self.log_C      #SELFISH: I want to observe them doing what's best for me 
+                    
+                    # #To calculate this in a mean-field way (i.e. factor by factor, I think we have to marginalise out the third agent)
+                    # for other_idx in range(1, n_agents):
+                    #     if other_idx != factor_idx:
+                    #         log_C_opp = log_C_opp.sum(dim=other_idx, keepdim=True)
+                    
+
+                    # action_one_hot = F.one_hot(torch.tensor(action), num_classes=s_pred.size(1)).float()
+                    # # Concatenate the one-hot vector to the top of s_pred
+                    # s_pred = torch.cat((action_one_hot.unsqueeze(0), s_pred), dim=0)
+
+                    # #Split out all the s_pred predictions here: they'll fail unless you put your one-hot action as dimension zero, once that's it you're good.
+                    # s_pred = s_pred[factor_idx]
+
+                    # # Squeeze to remove unnecessary dimensions and extract the relevant slice
+                    # log_C_modality = log_C_opp[action].squeeze()
+    
+                    # print(f'Log C Modality (them - small) (Action {action}, Factor {factor_idx}): {log_C_modality}')
+        
+                # # Posterior predictive observation(s) for both factors: THIS SHOULD BE A VECTOR EACH TIME
+                o_pred = self.A[factor_idx].T @ s_pred
+
+                # Assertions before EFE calculation
+
+                # EFE = Expected ambiguity + risk 
+                EFE[action] += H @ s_pred + (o_pred @ (torch.log(o_pred + 1e-9) - log_C_modality))
+
+                ambiguity[action] += (H @ s_pred) # Ambiguity is conditional entropy of emissions (0)
+                risk[action] += (o_pred @ (torch.log(o_pred + 1e-9)))  - (o_pred @ log_C_modality) # Risk is negative posterior predictive entropy minus pragmatic value
+                salience[action] += -(o_pred @ (torch.log(o_pred + 1e-9)))  - (H @ s_pred) # Salience is negative posterior predictive entropy minus ambiguity (0)
+                pragmatic_value[action] += (o_pred @ log_C_modality) # Pragmatic value is negative cross-entropy
+       
+        #Summed over each factor (for each action)
+        self.EFE = EFE
+        self.ambiguity = ambiguity
+        self.risk = risk
+        self.salience = salience
+        self.pragmatic_value = pragmatic_value
+        self.novelty = novelty
+        
+        return EFE
+
+    def select_action(self):
+        EFE = self.compute_efe()
+        q_pi = torch.softmax(torch.log(self.E) - self.gamma * EFE, dim=0)
+
+        self.action = torch.multinomial(q_pi, 1).item()
+
+        self.update_precision(EFE, q_pi)
+        self.q_pi = q_pi
+        return self.action
+
+    def update_precision(self, EFE, q_pi):
+        # Compute the expected EFE as a scalar value
+        self.expected_EFE = [torch.dot(q_pi, EFE).item()]
+        
+        # Update gamma (the precision) based on the expected EFE
+        # self.gamma = self.beta_1 / (self.beta_0 - self.expected_EFE[0])
+        
+        return self.gamma
+
+    # ========================================
+    # Learning p(a_j | a_i)
+    # =======================================
+
+    # Define the n-player generalized function
+    def bayesian_learning(self, o, eta=1):
+        
+        # Find the joint action index
+        joint_action_idx = [torch.argmax(o[agent]).item() for agent in range(self.C_opp_params.dim())]
+        joint_action_idx = tuple(joint_action_idx)
+        
+        # Update based on observed action
+        self.C_opp_params[joint_action_idx] += eta
+
+        # Temporal discounting
+        self.C_opp_params *= self.decay
+        self.C_opp_params += 1e-9
+        
+        return self.C_opp_params
