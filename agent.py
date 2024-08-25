@@ -28,7 +28,7 @@ class Agent:
         self.decay = decay  # Forgetting rate for learning
 
         # Generative model hyperparameters
-        self.game_matrix = game_matrix  # Rewards from row player's perspective
+        self.game_matrix = game_matrix.to(torch.float)  # Rewards from row player's perspective (force to float)
         # self.game_matrix = (game_matrix / game_matrix.sum()) #Input probabilities instead instead of log rewards?
         num_actions = game_matrix.shape[0]  # Number of actions (assuming symmetrical actions)
         num_agents = game_matrix.ndim  # Number of players (rank of game tensor)
@@ -37,7 +37,7 @@ class Agent:
         self.alpha = [torch.ones(num_actions) for _ in range(num_agents)]  # Dirichlet state prior
         self.A = [torch.eye(num_actions) for _ in range(num_agents)]  # Identity observation model
         self.B = lambda s, u: s  # Identity transition model (given s and u, return s)
-        self.log_C = game_matrix  # Payoffs for joint actions (in matrix form, from row player's perspective)
+        self.log_C = game_matrix.to(torch.float)  # Payoffs for joint actions (in matrix form, from row player's perspective) (force to float)
         self.prob_C = None
         self.s = [Dirichlet(alpha).mean for alpha in self.alpha]  # Categorical state prior (D?)
         self.E = torch.ones(num_actions) / num_actions  # Habits 
@@ -219,6 +219,7 @@ class Agent:
                     indices_left = list(range(1, n_agents))     # [1, ..., n-1]
                     indices_right = list(range(n_agents - 1))   # [0, ..., n-2]
                     
+
                     log_C_modality = torch.tensordot(
                         self.log_C,  # (2, 2, 2)
                         expected_probs[action],  # (2, 2)
@@ -244,6 +245,8 @@ class Agent:
                     else:
                         expected_probs_marginal = expected_probs.sum(dim=factor_idx, keepdim=True)  # p(u_{-j-i}|u_i) = sum_{u_j} p(u_{-i} | u_i)
 
+                    # print(F'Expected probs marginal (them): {expected_probs_marginal}')
+
                     # Indices for tensor dot product
                     indices_left = list(range(n_agents-1))      # [0, ..., n-2]
                     indices_left.remove(factor_idx-1)           # Remove the current factor index  [1, ..., n-1] \ j
@@ -258,11 +261,16 @@ class Agent:
                             dims=(indices_left, indices_right)
                         )
 
-                    # s_pred = expected_probs.sum(dim=indices_right)[action]
-                    s_pred = expected_probs_marginal[action].squeeze()
+                    # print(f'log C modality (them): {log_C_modality}')
+
+                    s_pred = expected_probs.sum(dim=indices_right)[action]
+                    # s_pred = expected_probs_marginal[action].squeeze()
+                    # print(f'S pred (them): {s_pred}')
             
                 # # Posterior predictive observation(s) for both factors: THIS SHOULD BE A VECTOR EACH TIME
                 o_pred = self.A[factor_idx].T @ s_pred
+
+                #print(f'o_pred (all): {o_pred}')
 
                 # EFE = Expected ambiguity + risk 
                 EFE[action] += H @ s_pred + (o_pred @ (torch.log(o_pred + 1e-9) - log_C_modality))
