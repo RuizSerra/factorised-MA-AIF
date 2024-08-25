@@ -41,6 +41,7 @@ class Agent:
         self.prob_C = None
         self.s = [Dirichlet(alpha).mean for alpha in self.alpha]  # Categorical state prior (D?)
         self.E = torch.ones(num_actions) / num_actions  # Habits 
+        self.opp_pred = [None] * num_agents
 
         # self.A_params = torch.eye(2)
         # self.B_params = torch.tensor([torch.eye(2), torch.eye(2)])
@@ -148,6 +149,7 @@ class Agent:
     def infer_state(self, o, learning_rate=1e-2, num_iterations=100, num_samples=100):
         for factor_idx in range(len(self.s)):  # Loop over each state factor (me + the other agents)
             s_prev = self.s[factor_idx].clone().detach()  # State t-1
+            assert torch.allclose(s_prev.sum(), torch.tensor(1.0)), "s_prev tensor does not sum to 1."
             log_prior = torch.log(self.B(s_prev, self.action) + 1e-9)  # New prior is old posterior
             log_likelihood = torch.log(self.A[factor_idx] @ o[factor_idx] + 1e-9)  # Probability of observation given hidden states
 
@@ -210,25 +212,25 @@ class Agent:
                 ### ==== MY PREFERENCES OVER MY ACTIONS === ### -  [What I wish to observe me doing, given what I expect they will do]
                 if factor_idx == 0:  
                     s_pred = self.B(self.s[factor_idx], action)  # Predicted state q(s | s, u)
-                    # print(f's pred me: {s_pred}')
+                    assert torch.allclose(s_pred.sum(), torch.tensor(1.0)), "s_pred (F0) tensor does not sum to 1."
                     
-                    # PPS (opponent)
+                    # PPS (joint action, joint probability distribution)
                     expected_probs = self.C_opp_params / self.C_opp_params.sum(dim=list(range(1, n_agents)), keepdim=True)   # p(u_j, u_k | u_i)
-                    
+                    assert torch.allclose(expected_probs.sum(), torch.tensor(float(num_actions))), "Expected joint action probs (F0) do not sum to num actions."
+
                     # Indices for tensor dot product
-                    indices_left = list(range(1, n_agents))     # [1, ..., n-1]
+                    indices_left = list(range(1, n_agents))     # [1, ..., n-1] 
                     indices_right = list(range(n_agents - 1))   # [0, ..., n-2]
                     
-
+                    #Multiply joint payoffs by probability of joint action
                     log_C_modality = torch.tensordot(
                         self.log_C,  # (2, 2, 2)
                         expected_probs[action],  # (2, 2)
                         dims=(indices_left, indices_right)
                     )
-
-                    # print(f'log C modality (me): {log_C_modality}')
+                    assert log_C_modality.ndimension() == 1, "log_C_modality (F0) is not a 1-dimensional tensor."
                     
-         
+                    
                 ### ==== MY PREFERENCES OVER THEIR ACTIONS === [what I’d wish to observe them doing, were I to do action u, given my model of their preferences]
                 else:  
 
@@ -237,16 +239,14 @@ class Agent:
 
                     # Normalize C_opp_params across joint actions to get the expected probabilities
                     expected_probs = self.C_opp_params / self.C_opp_params.sum(dim=list(range(1, n_agents)), keepdim=True)  # p(u_{-i} | u_i)
+                    assert torch.allclose(expected_probs.sum(), torch.tensor(float(num_actions))), "Expected joint action probs (F0) do not sum to num actions."
 
                     # Marginalise out the current factor agent to get expected probs for all other agents (not i, not j)
                     if n_agents == 2:
                         expected_probs_marginal = expected_probs 
-                        # expected_probs_marginal = expected_probs[factor_idx] #Add factor_idx to get agent j
                     else:
                         expected_probs_marginal = expected_probs.sum(dim=factor_idx, keepdim=True)  # p(u_{-j-i}|u_i) = sum_{u_j} p(u_{-i} | u_i)
-
-                    # print(F'Expected probs marginal (them): {expected_probs_marginal}')
-
+                    
                     # Indices for tensor dot product
                     indices_left = list(range(n_agents-1))      # [0, ..., n-2]
                     indices_left.remove(factor_idx-1)           # Remove the current factor index  [1, ..., n-1] \ j
@@ -260,17 +260,23 @@ class Agent:
                             expected_probs_marginal[action].squeeze(),   # (2,)
                             dims=(indices_left, indices_right)
                         )
+                    assert log_C_modality.ndimension() == 1, "log_C_modality (F_j) is not a 1-dimensional tensor."
 
-                    # print(f'log C modality (them): {log_C_modality}')
+                    if n_agents == 2:
+                        s_pred = expected_probs_marginal[action].squeeze() #Original which was throwing an error
+                        assert torch.allclose(s_pred.sum(), torch.tensor(1.0)), "s_pred (F_j) tensor does not sum to 1."
+                    else:
+                        s_pred = expected_probs.sum(dim=indices_right)[action]
+                        s_pred = s_pred / s_pred.sum() #Legit to normalise this? 
+                        assert torch.allclose(s_pred.sum(), torch.tensor(1.0)), "s_pred (F_j) tensor does not sum to 1."
 
-                    s_pred = expected_probs.sum(dim=indices_right)[action]
-                    # s_pred = expected_probs_marginal[action].squeeze()
-                    # print(f'S pred (them): {s_pred}')
+                    
             
                 # # Posterior predictive observation(s) for both factors: THIS SHOULD BE A VECTOR EACH TIME
                 o_pred = self.A[factor_idx].T @ s_pred
+                assert torch.allclose(o_pred.sum(), torch.tensor(1.0)), "o_pred (F_j) tensor does not sum to 1."
 
-                #print(f'o_pred (all): {o_pred}')
+                assert log_C_modality.ndimension() == 1, "log_C_modality (main) is not a 1-dimensional tensor."
 
                 # EFE = Expected ambiguity + risk 
                 EFE[action] += H @ s_pred + (o_pred @ (torch.log(o_pred + 1e-9) - log_C_modality))
@@ -297,6 +303,7 @@ class Agent:
     def select_action(self):
         EFE = self.compute_efe()
         q_pi = torch.softmax(torch.log(self.E) - self.gamma * EFE, dim=0)
+        assert torch.allclose(q_pi.sum(), torch.tensor(1.0)), "q_pi policy tensor does not sum to 1."
 
         self.action = torch.multinomial(q_pi, 1).item()
 
