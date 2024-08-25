@@ -162,10 +162,14 @@ class Agent:
                 vfe_samples = torch.sum(s_samples * (log_s - log_likelihood - log_prior), dim=-1) 
                 VFE = vfe_samples.mean()
 
-                entropy = -1 * torch.sum(s_samples * log_s, dim=-1).mean()
-                energy = -1 * torch.sum(s_samples * (log_prior + log_likelihood), dim=-1).mean()
-                accuracy = torch.sum(s_samples * (log_likelihood), dim=-1).mean()
-                complexity = (-1 * torch.sum(s_samples * (log_prior), dim=-1).mean()) - entropy
+
+                entropy = -torch.sum(s_samples.detach() * log_s.detach(), dim=-1).mean()
+                energy = -torch.sum(s_samples.detach() * (log_prior.detach() + log_likelihood.detach()), dim=-1).mean()
+                accuracy = -torch.sum(s_samples.detach() * log_likelihood.detach(), dim=-1).mean()
+                complexity = torch.sum(s_samples.detach() * (log_prior.detach() - log_s.detach()), dim=-1).mean()
+
+                assert torch.allclose(energy - entropy, VFE, atol=1e-6), "Assertion failed: energy + entropy does not equal VFE"
+                assert torch.allclose(accuracy - complexity, VFE, atol=1e-6), "Assertion failed: accuracy - complexity does not equal VFE"
 
                 VFE.backward()
                 optimizer.step()
@@ -206,45 +210,12 @@ class Agent:
                 
                 ### ==== MY PREFERENCES OVER MY ACTIONS === ### -  [What I wish to observe me doing, given what I expect they will do]
                 if factor_idx == 0:  
-                    # PPS (me)
                     s_pred = self.B(self.s[factor_idx], action)  # Predicted state q(s | s, u)
                     # print(f's pred me: {s_pred}')
                     # o_pred = self.A[factor_idx] @ s_pred
                     
                     # PPS (opponent)
                     expected_probs = self.C_opp_params / self.C_opp_params.sum(dim=list(range(1, n_agents)), keepdim=True)   # p(u_j, u_k | u_i)
-
-                    # if n_agents == 2:  # Special case for 2-player scenario
-                    #     s_pred_opponents = expected_probs[action].squeeze()
-                    # else:
-                    #     s_pred_opponents = []
-
-                    #     for opponent_idx in range(1, n_agents):  # Loop over each opponent (skip self-action)
-                    #         s_pred_opponent = expected_probs[action].clone()  # Conditioning on my action
-
-                    #         # Sum over all other opponents' actions to marginalize out their influence
-                    #         for dim in range(n_agents - 1):  # Sum over dimensions 0 and 1 (after conditioning on action)
-                    #             if dim != opponent_idx - 1:  # Only skip the current opponent's dimension
-                    #                 s_pred_opponent = s_pred_opponent.sum(dim=dim, keepdim=True)
-
-                    #         s_pred_opponent = s_pred_opponent.squeeze()  # Remove extra dimensions
-                    #         s_pred_opponent /= s_pred_opponent.sum()  # Normalize to get a probability distribution
-
-                    #         # Append the result to the list
-                    #         s_pred_opponents.append(s_pred_opponent)
-
-                    #     # Stack all predicted actions for all opponents
-                    #     s_pred_opponents = torch.stack(s_pred_opponents)
-
-# #                    assert log_C.size(1) == s_pred_opponents.size(0), "Dimension mismatch between log_C and s_pred_opponent"
-                    
-#                     # print(f'n-agents: {n_agents}')
-#                     if n_agents == 2:  # Special case for 2 players
-#                         log_C_modality = self.log_C @ s_pred_opponents  # Matrix multiplication
-#                     else:
-#                         # Perform tensor dot product over all opponent dimensions
-#                         log_C_modality = torch.tensordot(self.log_C, s_pred_opponents, dims=(list(range(1, n_agents)), list(range(n_agents - 1))))
-
                     
                     # Indices for tensor dot product
                     indices_left = list(range(1, n_agents))     # [1, ..., n-1]
@@ -256,10 +227,6 @@ class Agent:
                         dims=(indices_left, indices_right)
                     )
                     
-                    # print(f'Log C Modality (me - smol) (Action {action}, Factor {factor_idx}): {log_C_modality} - only look at the relevant action element?')
-
-
-                    #####################
 
          
                 ### ==== MY PREFERENCES OVER THEIR ACTIONS === [what I’d wish to observe them doing, were I to do action u, given my model of their preferences]
@@ -282,11 +249,6 @@ class Agent:
                     indices_left.remove(factor_idx-1)           # Remove the current factor index  [1, ..., n-1] \ j
                     
                     indices_right = list(range(n_agents - 2))   # [0, ..., n-3]  because we've removed both i (ego; conditional) and j (current factor; marginalised)
-
-                    # print('For factor', factor_idx)
-                    # print('indices', indices_left, indices_right)
-                    # print('expected probs marginal', expected_probs_marginal, expected_probs_marginal.shape)
-                    # print('log_C[action]', self.log_C[action], self.log_C[action].shape)
                     
                     log_C_modality = torch.tensordot(
                         self.log_C[action], # (2, 2)
@@ -296,60 +258,9 @@ class Agent:
 
                     # s_pred = expected_probs.sum(dim=indices_right)[action]
                     s_pred = expected_probs_marginal[action].squeeze()
-
-                    # print(factor_idx, log_C_modality)
-
-                    # if n_agents == 2:  # Special case for 2-player scenario
-                    #     s_pred_opponents = expected_probs[action].squeeze()
-                    # else:
-                    #     s_pred_opponents = []
-
-                    #     for opponent_idx in range(1, n_agents):  # Loop over each opponent (skip self-action)
-                    #         s_pred_opponent = expected_probs[action].clone()  # Conditioning on my action
-
-                    #         # Sum over all other opponents' actions to marginalize out their influence
-                    #         for dim in range(n_agents - 1):  # Sum over dimensions 0 and 1 (after conditioning on action)
-                    #             if dim != opponent_idx - 1:  # Only skip the current opponent's dimension
-                    #                 s_pred_opponent = s_pred_opponent.sum(dim=dim, keepdim=True)
-
-                    #         s_pred_opponent = s_pred_opponent.squeeze()  # Remove extra dimensions
-                    #         s_pred_opponent /= s_pred_opponent.sum()  # Normalize to get a probability distribution
-
-                    #         # Append the result to the list
-                    #         s_pred_opponents.append(s_pred_opponent)
-
-                    #     # Stack all predicted actions for all opponents
-                    #     s_pred = torch.stack(s_pred_opponents)
-                    #     # print(f's pred them: {s_pred}')
-
-
-                    #################### n-agent
-
-                    #My preferences over joint states don't change
-                    # log_C_opp = self.log_C      #SELFISH: I want to observe them doing what's best for me 
-                    
-                    # #To calculate this in a mean-field way (i.e. factor by factor, I think we have to marginalise out the third agent)
-                    # for other_idx in range(1, n_agents):
-                    #     if other_idx != factor_idx:
-                    #         log_C_opp = log_C_opp.sum(dim=other_idx, keepdim=True)
-                    
-
-                    # action_one_hot = F.one_hot(torch.tensor(action), num_classes=s_pred.size(1)).float()
-                    # # Concatenate the one-hot vector to the top of s_pred
-                    # s_pred = torch.cat((action_one_hot.unsqueeze(0), s_pred), dim=0)
-
-                    # #Split out all the s_pred predictions here: they'll fail unless you put your one-hot action as dimension zero, once that's it you're good.
-                    # s_pred = s_pred[factor_idx]
-
-                    # # Squeeze to remove unnecessary dimensions and extract the relevant slice
-                    # log_C_modality = log_C_opp[action].squeeze()
-    
-                    # print(f'Log C Modality (them - small) (Action {action}, Factor {factor_idx}): {log_C_modality}')
         
                 # # Posterior predictive observation(s) for both factors: THIS SHOULD BE A VECTOR EACH TIME
                 o_pred = self.A[factor_idx].T @ s_pred
-
-                # Assertions before EFE calculation
 
                 # EFE = Expected ambiguity + risk 
                 EFE[action] += H @ s_pred + (o_pred @ (torch.log(o_pred + 1e-9) - log_C_modality))
@@ -365,7 +276,14 @@ class Agent:
         self.risk = risk
         self.salience = salience
         self.pragmatic_value = pragmatic_value
-        self.novelty = novelty
+        # self.novelty = novelty
+
+        # Assertion to check if risk + ambiguity equals EFE
+        assert torch.allclose(risk + ambiguity, EFE, atol=1e-6), "Assertion failed: risk + ambiguity does not equal EFE"
+
+        # Assertion to check if -salience - pragmatic_value equals EFE
+        assert torch.allclose(-salience - pragmatic_value, EFE, atol=1e-6), "Assertion failed: -salience - pragmatic_value does not equal EFE"
+
         
         return EFE
 
