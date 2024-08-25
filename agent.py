@@ -23,7 +23,7 @@ class Agent:
         # Learning parameters
         self.beta_0 = 1.0  # beta in Gamma distribution (stays fixed)
         self.beta_1 = beta_1  # alpha in Gamma distribution (sets the prior precision mean)
-        self.gamma = self.beta_1 / self.beta_0
+        self.gamma = self.beta_1 / self.beta_0 #Current precision
         self.dynamic_precision = dynamic_precision  # Enables precision updating
         self.decay = decay  # Forgetting rate for learning
 
