@@ -234,28 +234,28 @@ class Agent:
                     # # PPS (them) is conditioned on all other agents actions (n-player case)
                     n_agents = self.C_opp_params.dim()  # Number of agents (including self)
 
-                    print(f'Log C Opp Params: {self.C_opp_params}, ndim = {self.C_opp_params.ndim}')
+                    print(f'Joint action Dirichlets: {self.C_opp_params}, ndim = {self.C_opp_params.ndim}')
                     print()
 
                     # Normalize C_opp_params across joint actions to get the expected probabilities
                     expected_probs = self.C_opp_params / self.C_opp_params.sum(dim=list(range(1, n_agents)), keepdim=True)  # p(u_{-i} | u_i)
 
-                    print(f'Expected probs: {expected_probs}, ndim = {expected_probs.ndim}')
+                    print(f'Their expected action: {expected_probs}, ndim = {expected_probs.ndim}')
                     print()
 
                     # Marginalise out the current factor agent to get expected probs for all other agents (not i, not j)
-                    print(f'N agents: {n_agents}')
+                    # print(f'N agents: {n_agents}')
                     if n_agents == 2:
                         expected_probs_marginal = expected_probs 
                         # expected_probs_marginal = expected_probs[factor_idx] #Add factor_idx to get agent j
                     else:
                         expected_probs_marginal = expected_probs.sum(dim=factor_idx, keepdim=True)  # p(u_{-j-i}|u_i) = sum_{u_j} p(u_{-i} | u_i)
 
-                    print(f'Expected probs marginal: {expected_probs_marginal}, ndim = {expected_probs_marginal.ndim}')
+                    print(f'Their expected action (marginal): {expected_probs_marginal}, ndim = {expected_probs_marginal.ndim}')
                     print()
 
-                    print(f'Left index: {indices_left}')
-                    print(f'Right index: {indices_right}')
+                    # print(f'Left index: {indices_left}')
+                    # print(f'Right index: {indices_right}')
 
 
                     # Indices for tensor dot product
@@ -263,7 +263,7 @@ class Agent:
                     indices_left.remove(factor_idx-1)           # Remove the current factor index  [1, ..., n-1] \ j
                     indices_right = list(range(n_agents - 2))   # [0, ..., n-3]  because we've removed both i (ego; conditional) and j (current factor; marginalised)
                     
-                    print(f'Log C Action: {self.log_C[action]}, ndim = {self.log_C[action].ndim}')
+                    print(f'Payoffs if I choose this action (for each of theirs): {self.log_C[action]}, ndim = {self.log_C[action].ndim}')
                     print()
 
                     if n_agents == 2:
@@ -275,12 +275,12 @@ class Agent:
                             dims=(indices_left, indices_right)
                         )
 
-                    print(f'log C modality (them): {log_C_modality}, ndim = {log_C_modality.ndim}')
+                    print(f'Expected payoff per state: {log_C_modality}, ndim = {log_C_modality.ndim}')
                     print()
 
                     # s_pred = expected_probs.sum(dim=indices_right)[action]
                     s_pred = expected_probs_marginal[action].squeeze()
-                    print(f's_pred them: {s_pred}, ndim = {s_pred.ndim}')
+                    print(f'Their expected action (given my action) {s_pred}, ndim = {s_pred.ndim}')
                     print()
 
 
