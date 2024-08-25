@@ -162,14 +162,13 @@ class Agent:
                 vfe_samples = torch.sum(s_samples * (log_s - log_likelihood - log_prior), dim=-1) 
                 VFE = vfe_samples.mean()
 
-
                 entropy = -torch.sum(s_samples.detach() * log_s.detach(), dim=-1).mean()
                 energy = -torch.sum(s_samples.detach() * (log_prior.detach() + log_likelihood.detach()), dim=-1).mean()
-                accuracy = -torch.sum(s_samples.detach() * log_likelihood.detach(), dim=-1).mean()
-                complexity = torch.sum(s_samples.detach() * (log_prior.detach() - log_s.detach()), dim=-1).mean()
+                accuracy = torch.sum(s_samples.detach() * log_likelihood.detach(), dim=-1).mean()
+                complexity = -torch.sum(s_samples.detach() * (log_prior.detach() - log_s.detach()), dim=-1).mean()
 
                 assert torch.allclose(energy - entropy, VFE, atol=1e-6), "Assertion failed: energy + entropy does not equal VFE"
-                assert torch.allclose(accuracy - complexity, VFE, atol=1e-6), "Assertion failed: accuracy - complexity does not equal VFE"
+                assert torch.allclose(complexity - accuracy, VFE, atol=1e-6), "Assertion failed: complexity - accuracy does not equal VFE"
 
                 VFE.backward()
                 optimizer.step()
@@ -212,7 +211,6 @@ class Agent:
                 if factor_idx == 0:  
                     s_pred = self.B(self.s[factor_idx], action)  # Predicted state q(s | s, u)
                     # print(f's pred me: {s_pred}')
-                    # o_pred = self.A[factor_idx] @ s_pred
                     
                     # PPS (opponent)
                     expected_probs = self.C_opp_params / self.C_opp_params.sum(dim=list(range(1, n_agents)), keepdim=True)   # p(u_j, u_k | u_i)
@@ -226,8 +224,9 @@ class Agent:
                         expected_probs[action],  # (2, 2)
                         dims=(indices_left, indices_right)
                     )
-                    
 
+                    # print(f'log C modality (me): {log_C_modality}')
+                    
          
                 ### ==== MY PREFERENCES OVER THEIR ACTIONS === [what I’d wish to observe them doing, were I to do action u, given my model of their preferences]
                 else:  
@@ -235,32 +234,62 @@ class Agent:
                     # # PPS (them) is conditioned on all other agents actions (n-player case)
                     n_agents = self.C_opp_params.dim()  # Number of agents (including self)
 
+                    print(f'Log C Opp Params: {self.C_opp_params}, ndim = {self.C_opp_params.ndim}')
+                    print()
+
                     # Normalize C_opp_params across joint actions to get the expected probabilities
                     expected_probs = self.C_opp_params / self.C_opp_params.sum(dim=list(range(1, n_agents)), keepdim=True)  # p(u_{-i} | u_i)
 
+                    print(f'Expected probs: {expected_probs}, ndim = {expected_probs.ndim}')
+                    print()
+
                     # Marginalise out the current factor agent to get expected probs for all other agents (not i, not j)
+                    print(f'N agents: {n_agents}')
                     if n_agents == 2:
-                        expected_probs_marginal = expected_probs
+                        expected_probs_marginal = expected_probs 
+                        # expected_probs_marginal = expected_probs[factor_idx] #Add factor_idx to get agent j
                     else:
                         expected_probs_marginal = expected_probs.sum(dim=factor_idx, keepdim=True)  # p(u_{-j-i}|u_i) = sum_{u_j} p(u_{-i} | u_i)
+
+                    print(f'Expected probs marginal: {expected_probs_marginal}, ndim = {expected_probs_marginal.ndim}')
+                    print()
+
+                    print(f'Left index: {indices_left}')
+                    print(f'Right index: {indices_right}')
+
 
                     # Indices for tensor dot product
                     indices_left = list(range(n_agents-1))      # [0, ..., n-2]
                     indices_left.remove(factor_idx-1)           # Remove the current factor index  [1, ..., n-1] \ j
-                    
                     indices_right = list(range(n_agents - 2))   # [0, ..., n-3]  because we've removed both i (ego; conditional) and j (current factor; marginalised)
                     
-                    log_C_modality = torch.tensordot(
-                        self.log_C[action], # (2, 2)
-                        expected_probs_marginal[action].squeeze(),   # (2,)
-                        dims=(indices_left, indices_right)
-                    )
+                    print(f'Log C Action: {self.log_C[action]}, ndim = {self.log_C[action].ndim}')
+                    print()
+
+                    if n_agents == 2:
+                        log_C_modality = self.log_C[action] * expected_probs_marginal[action]
+                    else:
+                        log_C_modality = torch.tensordot(
+                            self.log_C[action], # (2, 2)
+                            expected_probs_marginal[action].squeeze(),   # (2,)
+                            dims=(indices_left, indices_right)
+                        )
+
+                    print(f'log C modality (them): {log_C_modality}, ndim = {log_C_modality.ndim}')
+                    print()
 
                     # s_pred = expected_probs.sum(dim=indices_right)[action]
                     s_pred = expected_probs_marginal[action].squeeze()
-        
+                    print(f's_pred them: {s_pred}, ndim = {s_pred.ndim}')
+                    print()
+
+
                 # # Posterior predictive observation(s) for both factors: THIS SHOULD BE A VECTOR EACH TIME
                 o_pred = self.A[factor_idx].T @ s_pred
+                print(f'Final o_pred: {o_pred}')
+
+                print(f'Final log_C_modality: {log_C_modality}, ndim = {log_C_modality.ndim}')
+                print('-----------------------------')
 
                 # EFE = Expected ambiguity + risk 
                 EFE[action] += H @ s_pred + (o_pred @ (torch.log(o_pred + 1e-9) - log_C_modality))
@@ -278,10 +307,7 @@ class Agent:
         self.pragmatic_value = pragmatic_value
         # self.novelty = novelty
 
-        # Assertion to check if risk + ambiguity equals EFE
         assert torch.allclose(risk + ambiguity, EFE, atol=1e-6), "Assertion failed: risk + ambiguity does not equal EFE"
-
-        # Assertion to check if -salience - pragmatic_value equals EFE
         assert torch.allclose(-salience - pragmatic_value, EFE, atol=1e-6), "Assertion failed: -salience - pragmatic_value does not equal EFE"
 
         
