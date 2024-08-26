@@ -200,23 +200,30 @@ class Agent:
         novelty = torch.zeros(num_actions)  # n-action length vector of zeros
 
         n_agents = self.C_opp_params.dim()  # Number of agents (including self)
-        # print(f'n-agents: {n_agents}')
 
         # For each action
         for action in torch.arange(num_actions):
             # For each factor, the expected value is the value of the states (log C), multiplied by the action probabilities of the opponent
             for factor_idx in range(len(self.s)):
                 H = -torch.diag(self.A[factor_idx] @ torch.log(self.A[factor_idx] + 1e-9))  # Conditional (pseudo?) entropy (of the generated emissions matrix) - ZERO
-                # print(f'H: {H}')
+                assert H.ndimension() == 1, "log_C_modality (F0) is not a 1-dimensional tensor"
                 
                 ### ==== MY PREFERENCES OVER MY ACTIONS === ### -  [What I wish to observe me doing, given what I expect they will do]
                 if factor_idx == 0:  
+                    #My action - 
                     s_pred = self.B(self.s[factor_idx], action)  # Predicted state q(s | s, u)
                     assert torch.allclose(s_pred.sum(), torch.tensor(1.0)), "s_pred (F0) tensor does not sum to 1."
+                    assert torch.allclose(s_pred, self.s[factor_idx], atol=1e-6), "s_pred (F0) does not equal my last fictitious play estimate"
+                    #Should the above just use my actual action?
                     
-                    # PPS (joint action, joint probability distribution)
-                    expected_probs = self.C_opp_params / self.C_opp_params.sum(dim=list(range(1, n_agents)), keepdim=True)   # p(u_j, u_k | u_i)
+                    # PPS 
+                    # For each of my actions, what are the probabilities of the other agents action combos? e.g. p(CC | me = C), p(CD | me = C), p(DC | me = C), etc.
+                    expected_probs = self.C_opp_params / self.C_opp_params.sum(dim=list(range(1, n_agents)), keepdim=True)   # p(u_{-i} | u_i)
+                    assert expected_probs.ndimension() == n_agents, "Expected joint actions (F0) is not an n-agent dimensional tensor"
+                    assert torch.prod(torch.tensor(expected_probs.shape[:-1])) == num_actions ** (n_agents-1), "# Expected joint action (F0) vectors != num_actions^(n_agents - 1)"
                     assert torch.allclose(expected_probs.sum(), torch.tensor(float(num_actions))), "Expected joint action probs (F0) do not sum to num actions."
+                    assert torch.allclose(expected_probs[action].sum(), torch.tensor(1.0)), "Expected probs[action] (F0) tensor does not sum to 1."
+                    # This one isn't technically conditional probabilities, so not quite clocking it.
 
                     # Indices for tensor dot product
                     indices_left = list(range(1, n_agents))     # [1, ..., n-1] 
@@ -234,12 +241,14 @@ class Agent:
                 ### ==== MY PREFERENCES OVER THEIR ACTIONS === [what I’d wish to observe them doing, were I to do action u, given my model of their preferences]
                 else:  
 
-                    # # PPS (them) is conditioned on all other agents actions (n-player case)
                     n_agents = self.C_opp_params.dim()  # Number of agents (including self)
 
-                    # Normalize C_opp_params across joint actions to get the expected probabilities
+                    # #For each of my actions, what are the probabilities of the other agents action combos? e.g. p(CC | me = C), p(CD | me = C), p(DC | me = C), etc.
                     expected_probs = self.C_opp_params / self.C_opp_params.sum(dim=list(range(1, n_agents)), keepdim=True)  # p(u_{-i} | u_i)
-                    assert torch.allclose(expected_probs.sum(), torch.tensor(float(num_actions))), "Expected joint action probs (F0) do not sum to num actions."
+                    assert expected_probs.ndimension() == n_agents, "Expected joint actions (F_j) is not an n-agent dimensional tensor"
+                    assert torch.prod(torch.tensor(expected_probs.shape[:-1])) == num_actions ** (n_agents-1), "# Expected joint action (F_j) vectors != num_actions^(n_agents - 1)"
+                    assert torch.allclose(expected_probs.sum(), torch.tensor(float(num_actions))), "Expected joint action probs (F_j) do not sum to num actions."
+                    assert torch.allclose(expected_probs[action].sum(), torch.tensor(1.0)), "Expected probs[action] (F_j) tensor does not sum to 1."
 
                     # Marginalise out the current factor agent to get expected probs for all other agents (not i, not j)
                     if n_agents == 2:
@@ -294,8 +303,8 @@ class Agent:
         self.pragmatic_value = pragmatic_value
         # self.novelty = novelty
 
-        assert torch.allclose(risk + ambiguity, EFE, atol=1e-6), "Assertion failed: risk + ambiguity does not equal EFE"
-        assert torch.allclose(-salience - pragmatic_value, EFE, atol=1e-6), "Assertion failed: -salience - pragmatic_value does not equal EFE"
+        assert torch.allclose(risk + ambiguity, EFE, atol=1e-6), "Risk + ambiguity does not equal EFE"
+        assert torch.allclose(-salience - pragmatic_value, EFE, atol=1e-6), "-Salience - pragmatic_value does not equal EFE"
 
         
         return EFE
