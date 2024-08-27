@@ -335,14 +335,14 @@ class Agent:
     # =======================================
 
     # Define the n-player generalized function
-    def bayesian_learning(self, o, eta=1):
+    def bayesian_learning(self, o, eta=2):
         
         # Find the joint action index
         joint_action_idx = [torch.argmax(o[agent]).item() for agent in range(self.C_opp_params.dim())]
         joint_action_idx = tuple(joint_action_idx)
         
         # Update based on observed action
-        self.C_opp_params[joint_action_idx] += eta
+        self.C_opp_params[joint_action_idx] += eta / self.C_opp_params.numel()
 
         # Temporal discounting
         self.C_opp_params *= self.decay
