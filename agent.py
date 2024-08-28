@@ -276,7 +276,7 @@ class Agent:
                         )
 
                         s_pred = expected_probs.sum(dim=indices_left)[u_i]
-                        # s_pred = s_pred / s_pred.sum() #Legit to normalise this? 
+                        s_pred = s_pred / s_pred.sum()  # TODO: Legit to normalise this? 
 
                     assert log_C_modality.ndimension() == 1, "log_C_modality (F_j) is not a 1-dimensional tensor."
                     assert torch.allclose(s_pred.sum(), torch.tensor(1.0)), "s_pred (F_j) tensor does not sum to 1."                          
