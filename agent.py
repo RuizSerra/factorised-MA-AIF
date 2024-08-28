@@ -212,6 +212,7 @@ class Agent:
                 if factor_idx == 0:  
                     #My action - 
                     s_pred = self.B(self.s[factor_idx], u_i)  # Predicted state q(s | s, u)
+                    # s_pred = torch.nn.functional.one_hot(u_i, num_classes=n_actions).float() #Option to take the actual known action
                     assert torch.allclose(s_pred.sum(), torch.tensor(1.0)), "s_pred (F0) tensor does not sum to 1."
                     assert torch.allclose(s_pred, self.s[factor_idx], atol=1e-6), "s_pred (F0) does not equal my last fictitious play estimate"
                     #Should the above just use my actual action?
