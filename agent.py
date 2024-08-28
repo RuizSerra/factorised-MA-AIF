@@ -262,7 +262,9 @@ class Agent:
                                 p(u_{-j-i}|u_i) = p(u_k | u_i) = sum_{u_j} p(u_j, u_k | u_i) = sum_{u_j} p(u_{-i} | u_i)
                         '''
                         # Marginalise out the current factor agent to get expected probs for all other agents (not i, not j)
-                        expected_probs_marginal = expected_probs.sum(dim=factor_idx, keepdim=True)  # p(u_{-j-i}|u_i) = sum_{u_j} p(u_{-i} | u_i)
+                        # expected_probs_marginal = expected_probs.sum(dim=factor_idx, keepdim=True)  # p(u_{-j-i}|u_i) = sum_{u_j} p(u_{-i} | u_i)
+                        # FIXME: I think it should be
+                        expected_probs_marginal = expected_probs[u_i].sum(dim=factor_idx-1, keepdim=True)  # p(u_{-j-i}|u_i) = sum_{u_j} p(u_{-i} | u_i)
                     
                         # Indices for tensor dot product
                         indices_left = list(range(n_agents-1))      # [0, ..., n-2]
@@ -271,12 +273,16 @@ class Agent:
 
                         log_C_modality = torch.tensordot(
                             self.log_C[u_i], # (2, 2)
-                            expected_probs_marginal[u_i].squeeze(),   # (2,)
+                            # expected_probs_marginal[u_i].squeeze(),   # (2,)
+                            # FIXME: I think it should be
+                            expected_probs_marginal.squeeze(),   # (2,)
                             dims=(indices_left, indices_right)
                         )
 
-                        s_pred = expected_probs.sum(dim=indices_left)[u_i]
-                        s_pred = s_pred / s_pred.sum()  # TODO: Legit to normalise this? 
+                        # Compute the posterior predictive state for the current factor agent
+                        indices = list(range(n_agents-1))   # [0, ..., n-1]  because we've removed i (ego; conditional)
+                        indices.remove(factor_idx-1)        # Remove the current factor index  [0, ..., n-1] \ (j-1)  --> (j-1) because we've removed i (ego; conditional)
+                        s_pred = expected_probs[u_i].sum(dim=indices)  # p(u_j | u_i) = sum_{u_{-i-j}} p(u_j, u_{-i-j} | u_i)
 
                     assert log_C_modality.ndimension() == 1, "log_C_modality (F_j) is not a 1-dimensional tensor."
                     assert torch.allclose(s_pred.sum(), torch.tensor(1.0)), "s_pred (F_j) tensor does not sum to 1."                          
