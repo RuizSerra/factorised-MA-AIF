@@ -9,7 +9,6 @@ TODO: general linting
 
 import torch
 
-
 # Add a small CONSTANT to avoid log(0) issues
 CONSTANT = 1
 NEG_CONSTANT = -5
@@ -41,6 +40,11 @@ chicken_2player = torch.tensor(
     [[2.0, 3.0],      # Dare, Chicken
      [4.0, 1.0]]      # Chicken, Dare
 )
+
+matching_pennies_2player = torch.tensor(    # Matching pennies (row player payoffs)
+    [[ 1.0, -1.0],      # H T               # NOTE: to get column player payoffs, 
+     [-1.0,  1.0]]      # T H               #       G_c = -G_r
+)                                           #       e.g., to load, game_matrix=[(-1)**i * matching_pennies_2player for i in range(num_players)][i]
 
 # ==============================================================================
 # 2 Player, 3 action games
