@@ -191,18 +191,18 @@ class Agent:
     # Action 
     # =======================================
     def compute_efe(self):
-        num_actions = self.E.shape[0]  # Scalar (number of actions)
-        EFE = torch.zeros(num_actions)  # n-action length vector of zeros
-        ambiguity = torch.zeros(num_actions)  # n-action length vector of zeros
-        risk = torch.zeros(num_actions)  # n-action length vector of zeros
-        salience = torch.zeros(num_actions)  # n-action length vector of zeros
-        pragmatic_value = torch.zeros(num_actions)  # n-action length vector of zeros
-        novelty = torch.zeros(num_actions)  # n-action length vector of zeros
-
+        n_actions = self.E.shape[0]  # Scalar (number of actions)
         n_agents = self.C_opp_params.dim()  # Number of agents (including self)
+        
+        EFE = torch.zeros(n_actions)  # n-action length vector of zeros
+        ambiguity = torch.zeros(n_actions)  # n-action length vector of zeros
+        risk = torch.zeros(n_actions)  # n-action length vector of zeros
+        salience = torch.zeros(n_actions)  # n-action length vector of zeros
+        pragmatic_value = torch.zeros(n_actions)  # n-action length vector of zeros
+        novelty = torch.zeros(n_actions)  # n-action length vector of zeros
 
         # For each action
-        for action in torch.arange(num_actions):
+        for u_i in torch.arange(n_actions):
             # For each factor, the expected value is the value of the states (log C), multiplied by the action probabilities of the opponent
             for factor_idx in range(len(self.s)):
                 H = -torch.diag(self.A[factor_idx] @ torch.log(self.A[factor_idx] + 1e-9))  # Conditional (pseudo?) entropy (of the generated emissions matrix) - ZERO
@@ -211,7 +211,7 @@ class Agent:
                 ### ==== MY PREFERENCES OVER MY ACTIONS === ### -  [What I wish to observe me doing, given what I expect they will do]
                 if factor_idx == 0:  
                     #My action - 
-                    s_pred = self.B(self.s[factor_idx], action)  # Predicted state q(s | s, u)
+                    s_pred = self.B(self.s[factor_idx], u_i)  # Predicted state q(s | s, u)
                     assert torch.allclose(s_pred.sum(), torch.tensor(1.0)), "s_pred (F0) tensor does not sum to 1."
                     assert torch.allclose(s_pred, self.s[factor_idx], atol=1e-6), "s_pred (F0) does not equal my last fictitious play estimate"
                     #Should the above just use my actual action?
@@ -220,9 +220,9 @@ class Agent:
                     # For each of my actions, what are the probabilities of the other agents action combos? e.g. p(CC | me = C), p(CD | me = C), p(DC | me = C), etc.
                     expected_probs = self.C_opp_params / self.C_opp_params.sum(dim=list(range(1, n_agents)), keepdim=True)   # p(u_{-i} | u_i)
                     assert expected_probs.ndimension() == n_agents, "Expected joint actions (F0) is not an n-agent dimensional tensor"
-                    assert torch.prod(torch.tensor(expected_probs.shape[:-1])) == num_actions ** (n_agents-1), "# Expected joint action (F0) vectors != num_actions^(n_agents - 1)"
-                    assert torch.allclose(expected_probs.sum(), torch.tensor(float(num_actions))), "Expected joint action probs (F0) do not sum to num actions."
-                    assert torch.allclose(expected_probs[action].sum(), torch.tensor(1.0)), "Expected probs[action] (F0) tensor does not sum to 1."
+                    assert torch.prod(torch.tensor(expected_probs.shape[:-1])) == n_actions ** (n_agents-1), "# Expected joint action (F0) vectors != num_actions^(n_agents - 1)"
+                    assert torch.allclose(expected_probs.sum(), torch.tensor(float(n_actions))), "Expected joint action probs (F0) do not sum to num actions."
+                    assert torch.allclose(expected_probs[u_i].sum(), torch.tensor(1.0)), "Expected probs[action] (F0) tensor does not sum to 1."
                     # This one isn't technically conditional probabilities, so not quite clocking it.
 
                     # Indices for tensor dot product
@@ -232,68 +232,68 @@ class Agent:
                     #Multiply joint payoffs by probability of joint action
                     log_C_modality = torch.tensordot(
                         self.log_C,  # (2, 2, 2)
-                        expected_probs[action],  # (2, 2)
+                        expected_probs[u_i],  # (2, 2)
                         dims=(indices_left, indices_right)
                     )
                     assert log_C_modality.ndimension() == 1, "log_C_modality (F0) is not a 1-dimensional tensor."
                     
                     
-                ### ==== MY PREFERENCES OVER THEIR ACTIONS === [what I’d wish to observe them doing, were I to do action u, given my model of their preferences]
+                ### ==== MY PREFERENCES OVER THEIR ACTIONS === [what I wish to observe j doing, given what I plan on doing, and what I expect k will do]
                 else:  
-
-                    n_agents = self.C_opp_params.dim()  # Number of agents (including self)
 
                     # #For each of my actions, what are the probabilities of the other agents action combos? e.g. p(CC | me = C), p(CD | me = C), p(DC | me = C), etc.
                     expected_probs = self.C_opp_params / self.C_opp_params.sum(dim=list(range(1, n_agents)), keepdim=True)  # p(u_{-i} | u_i)
                     assert expected_probs.ndimension() == n_agents, "Expected joint actions (F_j) is not an n-agent dimensional tensor"
-                    assert torch.prod(torch.tensor(expected_probs.shape[:-1])) == num_actions ** (n_agents-1), "# Expected joint action (F_j) vectors != num_actions^(n_agents - 1)"
-                    assert torch.allclose(expected_probs.sum(), torch.tensor(float(num_actions))), "Expected joint action probs (F_j) do not sum to num actions."
-                    assert torch.allclose(expected_probs[action].sum(), torch.tensor(1.0)), "Expected probs[action] (F_j) tensor does not sum to 1."
+                    assert torch.prod(torch.tensor(expected_probs.shape[:-1])) == n_actions ** (n_agents-1), "# Expected joint action (F_j) vectors != num_actions^(n_agents - 1)"
+                    assert torch.allclose(expected_probs.sum(), torch.tensor(float(n_actions))), "Expected joint action probs (F_j) do not sum to num actions."
+                    assert torch.allclose(expected_probs[u_i].sum(), torch.tensor(1.0)), "Expected probs[action] (F_j) tensor does not sum to 1."
 
-                    # Marginalise out the current factor agent to get expected probs for all other agents (not i, not j)
+                    # Compute this factor's preferences and posterior predictive state
                     if n_agents == 2:
-                        expected_probs_marginal = expected_probs 
-                    else:
+                        '''
+                        Special case for 2 agents: if we were to marginalise there would be no distribution left, so we index straight from the tensors
+                        '''
+                        log_C_modality = self.log_C[u_i]
+                        s_pred = expected_probs[u_i].squeeze()
+                    elif n_agents > 2:
+                        '''
+                        General case for n agents: marginalise out the current factor agent to get expected probs for all other agents (not i, not j)
+                            Example for n=3 agents (i, j, k): 
+                                p(u_{-j-i}|u_i) = p(u_k | u_i) = sum_{u_j} p(u_j, u_k | u_i) = sum_{u_j} p(u_{-i} | u_i)
+                        '''
+                        # Marginalise out the current factor agent to get expected probs for all other agents (not i, not j)
                         expected_probs_marginal = expected_probs.sum(dim=factor_idx, keepdim=True)  # p(u_{-j-i}|u_i) = sum_{u_j} p(u_{-i} | u_i)
                     
-                    # Indices for tensor dot product
-                    indices_left = list(range(n_agents-1))      # [0, ..., n-2]
-                    indices_left.remove(factor_idx-1)           # Remove the current factor index  [1, ..., n-1] \ j
-                    indices_right = list(range(n_agents - 2))   # [0, ..., n-3]  because we've removed both i (ego; conditional) and j (current factor; marginalised)
+                        # Indices for tensor dot product
+                        indices_left = list(range(n_agents-1))      # [0, ..., n-2]
+                        indices_left.remove(factor_idx-1)           # Remove the current factor index  [1, ..., n-1] \ j
+                        indices_right = list(range(n_agents - 2))   # [0, ..., n-3]  because we've removed both i (ego; conditional) and j (current factor; marginalised)
 
-                    if n_agents == 2:
-                        log_C_modality = self.log_C[action] * expected_probs_marginal[action]
-                    else:
                         log_C_modality = torch.tensordot(
-                            self.log_C[action], # (2, 2)
-                            expected_probs_marginal[action].squeeze(),   # (2,)
+                            self.log_C[u_i], # (2, 2)
+                            expected_probs_marginal[u_i].squeeze(),   # (2,)
                             dims=(indices_left, indices_right)
                         )
+
+                        s_pred = expected_probs.sum(dim=indices_left)[u_i]
+                        # s_pred = s_pred / s_pred.sum() #Legit to normalise this? 
+
                     assert log_C_modality.ndimension() == 1, "log_C_modality (F_j) is not a 1-dimensional tensor."
-
-                    if n_agents == 2:
-                        s_pred = expected_probs_marginal[action].squeeze() #Original which was throwing an error
-                        assert torch.allclose(s_pred.sum(), torch.tensor(1.0)), "s_pred (F_j) tensor does not sum to 1."
-                    else:
-                        s_pred = expected_probs.sum(dim=indices_right)[action]
-                        s_pred = s_pred / s_pred.sum() #Legit to normalise this? 
-                        assert torch.allclose(s_pred.sum(), torch.tensor(1.0)), "s_pred (F_j) tensor does not sum to 1."
-
-                    
+                    assert torch.allclose(s_pred.sum(), torch.tensor(1.0)), "s_pred (F_j) tensor does not sum to 1."                          
             
-                # # Posterior predictive observation(s) for both factors: THIS SHOULD BE A VECTOR EACH TIME
+                # Posterior predictive observation(s) for both factors: THIS SHOULD BE A VECTOR EACH TIME
                 o_pred = self.A[factor_idx].T @ s_pred
                 assert torch.allclose(o_pred.sum(), torch.tensor(1.0)), "o_pred (F_j) tensor does not sum to 1."
 
                 assert log_C_modality.ndimension() == 1, "log_C_modality (main) is not a 1-dimensional tensor."
 
                 # EFE = Expected ambiguity + risk 
-                EFE[action] += H @ s_pred + (o_pred @ (torch.log(o_pred + 1e-9) - log_C_modality))
+                EFE[u_i] += H @ s_pred + (o_pred @ (torch.log(o_pred + 1e-9) - log_C_modality))
 
-                ambiguity[action] += (H @ s_pred) # Ambiguity is conditional entropy of emissions (0)
-                risk[action] += (o_pred @ (torch.log(o_pred + 1e-9)))  - (o_pred @ log_C_modality) # Risk is negative posterior predictive entropy minus pragmatic value
-                salience[action] += -(o_pred @ (torch.log(o_pred + 1e-9)))  - (H @ s_pred) # Salience is negative posterior predictive entropy minus ambiguity (0)
-                pragmatic_value[action] += (o_pred @ log_C_modality) # Pragmatic value is negative cross-entropy
+                ambiguity[u_i] += (H @ s_pred) # Ambiguity is conditional entropy of emissions (0)
+                risk[u_i] += (o_pred @ (torch.log(o_pred + 1e-9)))  - (o_pred @ log_C_modality) # Risk is negative posterior predictive entropy minus pragmatic value
+                salience[u_i] += -(o_pred @ (torch.log(o_pred + 1e-9)))  - (H @ s_pred) # Salience is negative posterior predictive entropy minus ambiguity (0)
+                pragmatic_value[u_i] += (o_pred @ log_C_modality) # Pragmatic value is negative cross-entropy
        
         #Summed over each factor (for each action)
         self.EFE = EFE
