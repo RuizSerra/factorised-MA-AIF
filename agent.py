@@ -356,7 +356,7 @@ class Agent:
         assert torch.allclose(risk + ambiguity, EFE, atol=1e-6), "Risk + ambiguity does not equal EFE"
         assert torch.allclose(-salience - pragmatic_value, EFE, atol=1e-6), "-Salience - pragmatic_value does not equal EFE"
 
-        EFE = EFE - novelty
+        # EFE = EFE - novelty
         print(f'Novelty: {novelty}')
         
         return EFE
