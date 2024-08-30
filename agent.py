@@ -313,13 +313,8 @@ class Agent:
        
             opp_pred_per_action.append(torch.stack(opp_pred))
 
-        #Summed over each factor (for each action)
-        self.EFE = EFE
-        self.ambiguity = ambiguity
-        self.risk = risk
-        self.salience = salience
-        self.pragmatic_value = pragmatic_value
-
+        
+        # Novelty --------------------------------------------------------------
         #Matrices of predicted s_preds (per action, stacked)
         self.opp_pred = torch.stack(opp_pred_per_action).squeeze()
         joint_distributions = []
@@ -358,6 +353,13 @@ class Agent:
 
         EFE = EFE - novelty
         # print(f'Novelty: {novelty}')
+
+        #Summed over each factor (for each action)
+        self.EFE = EFE
+        self.ambiguity = ambiguity
+        self.risk = risk
+        self.salience = salience
+        self.pragmatic_value = pragmatic_value
         
         return EFE
 
