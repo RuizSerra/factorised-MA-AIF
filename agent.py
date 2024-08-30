@@ -12,6 +12,8 @@ import torch.nn.functional as F
 from torch.distributions.dirichlet import Dirichlet
 from torch.distributions.kl import kl_divergence
 
+torch.set_printoptions(precision=2)
+
 class Agent:
     def __init__(self, id=None, game_matrix=None, beta_1=1, decay=0.99, dynamic_precision=False):
 
@@ -42,6 +44,7 @@ class Agent:
         self.s = [Dirichlet(alpha).mean for alpha in self.alpha]  # Categorical state prior (D?)
         self.E = torch.ones(num_actions) / num_actions  # Habits 
         self.opp_pred = [None] * num_agents
+        self.psi_pred = [None] * num_agents
 
         # self.A_params = torch.eye(2)
         # self.B_params = torch.tensor([torch.eye(2), torch.eye(2)])
@@ -193,6 +196,8 @@ class Agent:
     def compute_efe(self):
         n_actions = self.E.shape[0]  # Scalar (number of actions)
         n_agents = self.C_opp_params.dim()  # Number of agents (including self)
+        opp_pred_per_action = []  # List to hold the predictions for each action
+
         
         EFE = torch.zeros(n_actions)  # n-action length vector of zeros
         ambiguity = torch.zeros(n_actions)  # n-action length vector of zeros
@@ -203,6 +208,7 @@ class Agent:
 
         # For each action
         for u_i in torch.arange(n_actions):
+            opp_pred = []
             # For each factor, the expected value is the value of the states (log C), multiplied by the action probabilities of the opponent
             for factor_idx in range(len(self.s)):
                 H = -torch.diag(self.A[factor_idx] @ torch.log(self.A[factor_idx] + 1e-9))  # Conditional (pseudo?) entropy (of the generated emissions matrix) - ZERO
@@ -216,7 +222,7 @@ class Agent:
                     assert torch.allclose(s_pred.sum(), torch.tensor(1.0)), "s_pred (F0) tensor does not sum to 1."
                     assert torch.allclose(s_pred, self.s[factor_idx], atol=1e-6), "s_pred (F0) does not equal my last fictitious play estimate"
                     #Should the above just use my actual action?
-                    
+
                     # PPS 
                     # For each of my actions, what are the probabilities of the other agents action combos? e.g. p(CC | me = C), p(CD | me = C), p(DC | me = C), etc.
                     expected_probs = self.C_opp_params / self.C_opp_params.sum(dim=list(range(1, n_agents)), keepdim=True)   # p(u_{-i} | u_i)
@@ -291,9 +297,11 @@ class Agent:
                 # Posterior predictive observation(s) for both factors: THIS SHOULD BE A VECTOR EACH TIME
                 o_pred = self.A[factor_idx].T @ s_pred
                 assert torch.allclose(o_pred.sum(), torch.tensor(1.0)), "o_pred (F_j) tensor does not sum to 1."
-
+                
+                opp_pred.append(s_pred)
+       
                 assert log_C_modality.ndimension() == 1, "log_C_modality (main) is not a 1-dimensional tensor."
-                # assert torch.allclose(torch.exp(log_C_modality).sum(), torch.FloatTensor(n_agents)), "C does not sum to n agents." Legit check for C? 
+                # assert torch.allclose(torch.exp(log_C_modality).sum(), torch.FloatTensor(n_agents)), "C does not sum to n agents." Legit check for C that each modality is a prob dist? 
 
                 # EFE = Expected ambiguity + risk 
                 EFE[u_i] += H @ s_pred + (o_pred @ (torch.log(o_pred + 1e-9) - log_C_modality))
@@ -303,17 +311,55 @@ class Agent:
                 salience[u_i] += -(o_pred @ (torch.log(o_pred + 1e-9)))  - (H @ s_pred) # Salience is negative posterior predictive entropy minus ambiguity (0)
                 pragmatic_value[u_i] += (o_pred @ log_C_modality) # Pragmatic value is negative cross-entropy
        
+            opp_pred_per_action.append(torch.stack(opp_pred))
+
+        
+        # Novelty --------------------------------------------------------------
+        #Matrices of predicted s_preds (per action, stacked)
+        self.opp_pred = torch.stack(opp_pred_per_action).squeeze()
+        joint_distributions = []
+
+        # Loop over each action in range of the number of matrices in self.opp_pred
+        for action in range(self.opp_pred.shape[0]):
+
+            # Compute the joint distribution (incremental Dirichlet concentration) of predicted actions
+            joint_dist = torch.einsum(
+                ','.join(chr(ord('i') + n) for n in range(self.opp_pred.shape[1])) + '->' + ''.join(chr(ord('i') + n) for n in range(self.opp_pred.shape[1])),
+                *torch.unbind(self.opp_pred[action], dim=0))
+            
+            # Append the joint distribution to the list
+            joint_distributions.append(joint_dist)
+
+        # Stack the joint distributions along a new dimension
+        delta_psi = torch.stack(joint_distributions, dim=0)
+
+        # Calculate psi and psi_pred
+        psi = self.C_opp_params
+        psi_pred = psi + delta_psi
+        psi = Dirichlet(torch.flatten(psi))
+    
+        #Loop over psi_pred to calculate KL between new psi and old psi for each action
+        novelty = []
+        for action in range(psi_pred.shape[0]):
+            psi_pred_action = Dirichlet(torch.flatten(psi_pred[action]))
+            novelty_action = kl_divergence(psi_pred_action, psi)
+            novelty.append(novelty_action)
+
+        novelty = torch.stack(novelty)
+        self.novelty = novelty 
+
+        assert torch.allclose(risk + ambiguity, EFE, atol=1e-6), "Risk + ambiguity does not equal EFE"
+        assert torch.allclose(-salience - pragmatic_value, EFE, atol=1e-6), "-Salience - pragmatic_value does not equal EFE"
+
+        EFE = EFE - novelty
+        # print(f'Novelty: {novelty}')
+
         #Summed over each factor (for each action)
         self.EFE = EFE
         self.ambiguity = ambiguity
         self.risk = risk
         self.salience = salience
         self.pragmatic_value = pragmatic_value
-        # self.novelty = novelty
-
-        assert torch.allclose(risk + ambiguity, EFE, atol=1e-6), "Risk + ambiguity does not equal EFE"
-        assert torch.allclose(-salience - pragmatic_value, EFE, atol=1e-6), "-Salience - pragmatic_value does not equal EFE"
-
         
         return EFE
 
