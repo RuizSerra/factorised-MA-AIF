@@ -50,7 +50,7 @@ class Agent:
         # self.B_params = torch.tensor([torch.eye(2), torch.eye(2)])
         # Opponent modeling (what I think their preferences are, currently unused - no learning)
         # self.C_opp_params = self.log_C.T.clone().detach()    ### <--------------- TEST transpose log_C as if ego knew exactly alters preferences
-        self.C_opp_params = torch.ones_like(self.log_C)    ### <--------------- TEST uniform prior for opponent preferences
+        self.psi_params = torch.ones_like(self.log_C)    ### <--------------- TEST uniform prior for opponent preferences
         
         # Values for t = 0, plus resetting each timestep
         self.action = torch.multinomial(self.E, 1).item()  # Starting action randomly sampled according to habits
@@ -91,7 +91,7 @@ class Agent:
 
         # Format the game matrix and opponent model parameters
         formatted_game_matrix = format_tensor(self.log_C)
-        formatted_opponent_params = format_tensor(self.C_opp_params)
+        formatted_opponent_params = format_tensor(self.psi_params)
 
         # Format the state priors as percentages, with labels for each state factor
         formatted_state_priors = [
@@ -195,8 +195,8 @@ class Agent:
     # =======================================
     def compute_efe(self):
         n_actions = self.E.shape[0]  # Scalar (number of actions)
-        n_agents = self.C_opp_params.dim()  # Number of agents (including self)
-        opp_pred_per_action = []  # List to hold the predictions for each action
+        n_agents = self.psi_params.dim()  # Number of agents (including self)
+        self.opp_pred = torch.empty((n_actions, n_agents, n_actions))  # List to hold the predictions for each action
 
         
         EFE = torch.zeros(n_actions)  # n-action length vector of zeros
@@ -208,7 +208,6 @@ class Agent:
 
         # For each action
         for u_i in torch.arange(n_actions):
-            opp_pred = []
             # For each factor, the expected value is the value of the states (log C), multiplied by the action probabilities of the opponent
             for factor_idx in range(len(self.s)):
                 H = -torch.diag(self.A[factor_idx] @ torch.log(self.A[factor_idx] + 1e-9))  # Conditional (pseudo?) entropy (of the generated emissions matrix) - ZERO
@@ -225,7 +224,7 @@ class Agent:
 
                     # PPS 
                     # For each of my actions, what are the probabilities of the other agents action combos? e.g. p(CC | me = C), p(CD | me = C), p(DC | me = C), etc.
-                    expected_probs = self.C_opp_params / self.C_opp_params.sum(dim=list(range(1, n_agents)), keepdim=True)   # p(u_{-i} | u_i)
+                    expected_probs = self.psi_params / self.psi_params.sum(dim=list(range(1, n_agents)), keepdim=True)   # p(u_{-i} | u_i)
                     assert expected_probs.ndimension() == n_agents, "Expected joint actions (F0) is not an n-agent dimensional tensor"
                     assert torch.prod(torch.tensor(expected_probs.shape[:-1])) == n_actions ** (n_agents-1), "# Expected joint action (F0) vectors != num_actions^(n_agents - 1)"
                     assert torch.allclose(expected_probs.sum(), torch.tensor(float(n_actions))), "Expected joint action probs (F0) do not sum to num actions."
@@ -249,7 +248,7 @@ class Agent:
                 else:  
 
                     # #For each of my actions, what are the probabilities of the other agents action combos? e.g. p(CC | me = C), p(CD | me = C), p(DC | me = C), etc.
-                    expected_probs = self.C_opp_params / self.C_opp_params.sum(dim=list(range(1, n_agents)), keepdim=True)  # p(u_{-i} | u_i)
+                    expected_probs = self.psi_params / self.psi_params.sum(dim=list(range(1, n_agents)), keepdim=True)  # p(u_{-i} | u_i)
                     assert expected_probs.ndimension() == n_agents, "Expected joint actions (F_j) is not an n-agent dimensional tensor"
                     assert torch.prod(torch.tensor(expected_probs.shape[:-1])) == n_actions ** (n_agents-1), "# Expected joint action (F_j) vectors != num_actions^(n_agents - 1)"
                     assert torch.allclose(expected_probs.sum(), torch.tensor(float(n_actions))), "Expected joint action probs (F_j) do not sum to num actions."
@@ -298,7 +297,7 @@ class Agent:
                 o_pred = self.A[factor_idx].T @ s_pred
                 assert torch.allclose(o_pred.sum(), torch.tensor(1.0)), "o_pred (F_j) tensor does not sum to 1."
                 
-                opp_pred.append(s_pred)
+                self.opp_pred[u_i, factor_idx] = s_pred
        
                 assert log_C_modality.ndimension() == 1, "log_C_modality (main) is not a 1-dimensional tensor."
                 # assert torch.allclose(torch.exp(log_C_modality).sum(), torch.FloatTensor(n_agents)), "C does not sum to n agents." Legit check for C that each modality is a prob dist? 
@@ -310,21 +309,21 @@ class Agent:
                 risk[u_i] += (o_pred @ (torch.log(o_pred + 1e-9)))  - (o_pred @ log_C_modality) # Risk is negative posterior predictive entropy minus pragmatic value
                 salience[u_i] += -(o_pred @ (torch.log(o_pred + 1e-9)))  - (H @ s_pred) # Salience is negative posterior predictive entropy minus ambiguity (0)
                 pragmatic_value[u_i] += (o_pred @ log_C_modality) # Pragmatic value is negative cross-entropy
-       
-            opp_pred_per_action.append(torch.stack(opp_pred))
 
+        assert torch.allclose(risk + ambiguity, EFE, atol=1e-6), "Risk + ambiguity does not equal EFE"
+        assert torch.allclose(-salience - pragmatic_value, EFE, atol=1e-6), "-Salience - pragmatic_value does not equal EFE"
         
         # Novelty --------------------------------------------------------------
-        #Matrices of predicted s_preds (per action, stacked)
-        self.opp_pred = torch.stack(opp_pred_per_action).squeeze()
         joint_distributions = []
 
-        # Loop over each action in range of the number of matrices in self.opp_pred
-        for action in range(self.opp_pred.shape[0]):
+        # Loop over each action
+        for action in range(n_actions):
 
             # Compute the joint distribution (incremental Dirichlet concentration) of predicted actions
             joint_dist = torch.einsum(
-                ','.join(chr(ord('i') + n) for n in range(self.opp_pred.shape[1])) + '->' + ''.join(chr(ord('i') + n) for n in range(self.opp_pred.shape[1])),
+                ','.join(chr(ord('i') + n) for n in range(self.opp_pred.shape[1])) 
+                + '->' 
+                + ''.join(chr(ord('i') + n) for n in range(self.opp_pred.shape[1])),
                 *torch.unbind(self.opp_pred[action], dim=0))
             
             # Append the joint distribution to the list
@@ -334,7 +333,7 @@ class Agent:
         delta_psi = torch.stack(joint_distributions, dim=0)
 
         # Calculate psi and psi_pred
-        psi = self.C_opp_params
+        psi = self.psi_params
         psi_pred = psi + delta_psi
         psi = Dirichlet(torch.flatten(psi))
     
@@ -348,11 +347,8 @@ class Agent:
         novelty = torch.stack(novelty)
         self.novelty = novelty 
 
-        assert torch.allclose(risk + ambiguity, EFE, atol=1e-6), "Risk + ambiguity does not equal EFE"
-        assert torch.allclose(-salience - pragmatic_value, EFE, atol=1e-6), "-Salience - pragmatic_value does not equal EFE"
 
         EFE = EFE - novelty
-        # print(f'Novelty: {novelty}')
 
         #Summed over each factor (for each action)
         self.EFE = EFE
@@ -365,19 +361,19 @@ class Agent:
 
     def select_action(self):
         EFE = self.compute_efe()
-        q_pi = torch.softmax(torch.log(self.E) - self.gamma * EFE, dim=0)
-        assert torch.allclose(q_pi.sum(), torch.tensor(1.0)), "q_pi policy tensor does not sum to 1."
+        q_u = torch.softmax(torch.log(self.E) - self.gamma * EFE, dim=0)
+        assert torch.allclose(q_u.sum(), torch.tensor(1.0)), "q_u policy tensor does not sum to 1."
 
-        self.action = torch.multinomial(q_pi, 1).item()
+        self.action = torch.multinomial(q_u, 1).item()
 
         if self.dynamic_precision:
-            self.update_precision(EFE, q_pi)
-        self.q_pi = q_pi
+            self.update_precision(EFE, q_u)
+        self.q_u = q_u
         return self.action
 
-    def update_precision(self, EFE, q_pi):
+    def update_precision(self, EFE, q_u):
         # Compute the expected EFE as a scalar value
-        self.expected_EFE = [torch.dot(q_pi, EFE).item()]
+        self.expected_EFE = [torch.dot(q_u, EFE).item()]
         
         # Update gamma (the precision) based on the expected EFE
         self.gamma = self.beta_1 / (self.beta_0 - self.expected_EFE[0])
@@ -392,14 +388,14 @@ class Agent:
     def bayesian_learning(self, o, eta=1):
         
         # Find the joint action index
-        joint_action_idx = [torch.argmax(o[agent]).item() for agent in range(self.C_opp_params.dim())]
+        joint_action_idx = [torch.argmax(o[agent]).item() for agent in range(self.psi_params.dim())]
         joint_action_idx = tuple(joint_action_idx)
         
         # Update based on observed action
-        self.C_opp_params[joint_action_idx] += eta #/ self.C_opp_params.numel()
+        self.psi_params[joint_action_idx] += eta #/ self.C_opp_params.numel()
 
         # Temporal discounting
-        self.C_opp_params *= self.decay
-        self.C_opp_params += 1e-9
+        self.psi_params *= self.decay
+        self.psi_params += 1e-9
         
-        return self.C_opp_params
+        return self.psi_params
