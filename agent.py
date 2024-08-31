@@ -43,8 +43,8 @@ class Agent:
         self.prob_C = None
         self.s = [Dirichlet(alpha).mean for alpha in self.alpha]  # Categorical state prior (D?)
         self.E = torch.ones(num_actions) / num_actions  # Habits 
-        self.opp_pred = [None] * num_agents
-        self.psi_pred = [None] * num_agents
+        # self.opp_pred = [None] * num_agents
+        # self.psi_pred = [None] * num_agents
 
         # self.A_params = torch.eye(2)
         # self.B_params = torch.tensor([torch.eye(2), torch.eye(2)])
@@ -196,20 +196,21 @@ class Agent:
     def compute_efe(self):
         n_actions = self.E.shape[0]  # Scalar (number of actions)
         n_agents = self.psi_params.dim()  # Number of agents (including self)
-        self.opp_pred = torch.empty((n_actions, n_agents, n_actions))  # List to hold the predictions for each action
-
+        # self.opp_pred = torch.empty((n_actions, n_agents, n_actions))  # (FIXME: may not need this) List to hold the predictions for each action
+        self.q_o_u = torch.empty((n_actions, n_agents, n_actions))  # q(o|u_i) posterior predictive observation distribution conditional on action u_i
+        # (TODO: maybe self.q_o_u should be (n_agents, n_actions, n_actions) - not too important though) 
         
         EFE = torch.zeros(n_actions)  # n-action length vector of zeros
         ambiguity = torch.zeros(n_actions)  # n-action length vector of zeros
         risk = torch.zeros(n_actions)  # n-action length vector of zeros
         salience = torch.zeros(n_actions)  # n-action length vector of zeros
         pragmatic_value = torch.zeros(n_actions)  # n-action length vector of zeros
-        novelty = torch.zeros(n_actions)  # n-action length vector of zeros
+        novelty = torch.empty(n_actions) 
 
         # For each action
-        for u_i in torch.arange(n_actions):
+        for u_i in range(n_actions):
             # For each factor, the expected value is the value of the states (log C), multiplied by the action probabilities of the opponent
-            for factor_idx in range(len(self.s)):
+            for factor_idx in range(n_agents):
                 H = -torch.diag(self.A[factor_idx] @ torch.log(self.A[factor_idx] + 1e-9))  # Conditional (pseudo?) entropy (of the generated emissions matrix) - ZERO
                 assert H.ndimension() == 1, "log_C_modality (F0) is not a 1-dimensional tensor"
                 
@@ -223,10 +224,10 @@ class Agent:
                 
                 ### ==== MY PREFERENCES OVER MY ACTIONS === ### -  [What I wish to observe me doing, given what I expect they will do]
                 if factor_idx == 0:  
-                    #My action - 
+                    # Hidden state prediction
                     s_pred = self.B(self.s[factor_idx], u_i)  # Predicted state q(s | s, u)
-                    assert torch.allclose(s_pred, self.s[factor_idx], atol=1e-6), "s_pred (F0) does not equal my last fictitious play estimate"
-                    # TODO: Should the above just use my actual action?
+                    # TODO: This is placeholder for when B is an actual matrix
+                    # TODO: but maybe we could use q(u) (i.e. self.q_u) here
 
                     # Indices for tensor dot product
                     indices_left = list(range(1, n_agents))     # [1, ..., n-1] 
@@ -274,7 +275,7 @@ class Agent:
                         indices.remove(factor_idx-1)        # Remove the current factor index  [0, ..., n-1] \ (j-1)  --> (j-1) because we've removed i (ego; conditional)
                         s_pred = conditional_joint_prior[u_i].sum(dim=indices)  # p(u_j | u_i) = sum_{u_{-i-j}} p(u_j, u_{-i-j} | u_i)
                         
-                self.opp_pred[u_i, factor_idx] = s_pred
+                # self.opp_pred[u_i, factor_idx] = s_pred
                 assert torch.allclose(s_pred.sum(), torch.tensor(1.0)), f"s_pred (factor {factor_idx}) tensor does not sum to 1."
                 assert log_C_modality.ndimension() == 1, f"log_C_modality (factor {factor_idx}) is not a 1-dimensional tensor."
                 # assert torch.allclose(torch.exp(log_C_modality).sum(), torch.FloatTensor(n_agents)), "C does not sum to n agents."  # TODO: Legit check for C that each modality is a prob dist? 
@@ -283,6 +284,7 @@ class Agent:
                 o_pred = self.A[factor_idx].T @ s_pred
                 assert torch.allclose(o_pred.sum(), torch.tensor(1.0)), f"o_pred (factor {factor_idx}) tensor does not sum to 1."
                 assert o_pred.shape == (n_actions, ), f"o_pred (factor {factor_idx}) tensor is not the correct shape."
+                self.q_o_u[u_i, factor_idx] = o_pred
                 
                 # EFE = Expected ambiguity + risk 
                 EFE[u_i] += H @ s_pred + (o_pred @ (torch.log(o_pred + 1e-9) - log_C_modality))
@@ -292,52 +294,42 @@ class Agent:
                 salience[u_i] += -(o_pred @ (torch.log(o_pred + 1e-9)))  - (H @ s_pred) # Salience is negative posterior predictive entropy minus ambiguity (0)
                 pragmatic_value[u_i] += (o_pred @ log_C_modality) # Pragmatic value is negative cross-entropy
 
-        assert torch.allclose(risk + ambiguity, EFE, atol=1e-6), "Risk + ambiguity does not equal EFE"
-        assert torch.allclose(-salience - pragmatic_value, EFE, atol=1e-6), "-Salience - pragmatic_value does not equal EFE"
+            assert torch.allclose(risk[u_i] + ambiguity[u_i], EFE[u_i], atol=1e-6), "Risk + ambiguity does not equal EFE"
+            assert torch.allclose(-salience[u_i] - pragmatic_value[u_i], EFE[u_i], atol=1e-6), "-Salience - pragmatic_value does not equal EFE"
         
-        # Novelty --------------------------------------------------------------
-        joint_distributions = []
+            # Novelty ----------------------------------------------------------
 
-        # Loop over each action
-        for action in range(n_actions):
-
-            # Compute the joint distribution (incremental Dirichlet concentration) of predicted actions
-            joint_dist = torch.einsum(
-                ','.join(chr(ord('i') + n) for n in range(self.opp_pred.shape[1])) 
-                + '->' 
-                + ''.join(chr(ord('i') + n) for n in range(self.opp_pred.shape[1])),
-                *torch.unbind(self.opp_pred[action], dim=0))
+            # First compute psi_prime_params: what psi_params would be if updated 
+            # with posterior predictive observation (this is the same procedure 
+            # as in self.bayesian_learning(), except using o_pred instead of o).
+            # Find the joint action index
+            # FIXME: instead of argmax as if o_pred was one-hot, we should compute an expectation/soft update
+            joint_action_idx = [torch.argmax(self.q_o_u[u_i, factor_idx]).item() for factor_idx in range(n_agents)]
+            joint_action_idx = tuple(joint_action_idx)
             
-            # Append the joint distribution to the list
-            joint_distributions.append(joint_dist)
+            # Update based on observed action
+            ETA = 1
+            psi_prime_params = self.psi_params.clone()
+            psi_prime_params[joint_action_idx] += ETA  # FIXME: hardcoded ETA
 
-        # Stack the joint distributions along a new dimension
-        delta_psi = torch.stack(joint_distributions, dim=0)
-
-        # Calculate psi and psi_pred
-        psi = self.psi_params
-        psi_pred = psi + delta_psi
-        psi = Dirichlet(torch.flatten(psi))
+            # Temporal discounting
+            psi_prime_params *= self.decay
+            psi_prime_params += 1e-9
     
-        #Loop over psi_pred to calculate KL between new psi and old psi for each action
-        novelty = []
-        for action in range(psi_pred.shape[0]):
-            psi_pred_action = Dirichlet(torch.flatten(psi_pred[action]))
-            novelty_action = kl_divergence(psi_pred_action, psi)
-            novelty.append(novelty_action)
-
-        novelty = torch.stack(novelty)
-        self.novelty = novelty 
-
+            psi_given_o = Dirichlet(torch.flatten(psi_prime_params))
+            psi = Dirichlet(torch.flatten(self.psi_params))
+            novelty_action = kl_divergence(psi_given_o, psi)
+            novelty[u_i] = novelty_action
 
         EFE = EFE - novelty
 
-        #Summed over each factor (for each action)
+        # Data collection ------------------------------------------------------
         self.EFE = EFE
         self.ambiguity = ambiguity
         self.risk = risk
         self.salience = salience
         self.pragmatic_value = pragmatic_value
+        self.novelty = novelty
         
         return EFE
 
