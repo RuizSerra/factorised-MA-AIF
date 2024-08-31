@@ -43,7 +43,7 @@ class Agent:
         self.prob_C = None
         self.s = [Dirichlet(alpha).mean for alpha in self.alpha]  # Categorical state prior (D?)
         self.E = torch.ones(num_actions) / num_actions  # Habits 
-        # self.opp_pred = [None] * num_agents
+        # self.q_s_u = [None] * num_agents
         # self.psi_pred = [None] * num_agents
 
         # self.A_params = torch.eye(2)
@@ -196,8 +196,8 @@ class Agent:
     def compute_efe(self):
         n_actions = self.E.shape[0]  # Scalar (number of actions)
         n_agents = self.psi_params.dim()  # Number of agents (including self)
-        # self.opp_pred = torch.empty((n_actions, n_agents, n_actions))  # (FIXME: may not need this) List to hold the predictions for each action
-        self.q_o_u = torch.empty((n_actions, n_agents, n_actions))  # q(o|u_i) posterior predictive observation distribution conditional on action u_i
+        self.q_s_u = torch.empty((n_actions, n_agents, n_actions))  # q(s|u_i) posterior predictive state distribution (for each factor) conditional on action u_i
+        self.q_o_u = torch.empty((n_actions, n_agents, n_actions))  # q(o|u_i) posterior predictive observation distribution (for each factor) conditional on action u_i
         # (TODO: maybe self.q_o_u should be (n_agents, n_actions, n_actions) - not too important though) 
         
         EFE = torch.zeros(n_actions)  # n-action length vector of zeros
@@ -275,7 +275,7 @@ class Agent:
                         indices.remove(factor_idx-1)        # Remove the current factor index  [0, ..., n-1] \ (j-1)  --> (j-1) because we've removed i (ego; conditional)
                         s_pred = conditional_joint_prior[u_i].sum(dim=indices)  # p(u_j | u_i) = sum_{u_{-i-j}} p(u_j, u_{-i-j} | u_i)
                         
-                # self.opp_pred[u_i, factor_idx] = s_pred
+                self.q_s_u[u_i, factor_idx] = s_pred
                 assert torch.allclose(s_pred.sum(), torch.tensor(1.0)), f"s_pred (factor {factor_idx}) tensor does not sum to 1."
                 assert log_C_modality.ndimension() == 1, f"log_C_modality (factor {factor_idx}) is not a 1-dimensional tensor."
                 # assert torch.allclose(torch.exp(log_C_modality).sum(), torch.FloatTensor(n_agents)), "C does not sum to n agents."  # TODO: Legit check for C that each modality is a prob dist? 
@@ -299,27 +299,73 @@ class Agent:
         
             # Novelty ----------------------------------------------------------
 
+            # Original novelty implementation by Pat, left here for now to be able to 
+            # compare results with new implementation(s) below
+            if False:
+                psi = Dirichlet(torch.flatten(self.psi_params))
+                # delta_psi_params = torch.empty((n_actions, n_agents, n_actions))
+                novelty = torch.empty((n_actions,))
+                # Loop over each action in range of the number of matrices in self.q_s_u
+                for action in range(n_actions):
+
+                    # Compute the joint distribution (incremental Dirichlet concentration) of predicted actions
+                    joint_s_pred = torch.einsum(
+                        ','.join(chr(ord('i') + n) for n in range(n_agents)) 
+                        + '->' 
+                        + ''.join(chr(ord('i') + n) for n in range(n_agents)),
+                        *torch.unbind(self.q_s_u[action], dim=0))
+                    
+                    # Append the joint distribution to the list
+                    # delta_psi_params[action] = joint_s_pred
+
+                    pri_pred_params = self.psi_params + joint_s_pred
+                    psi_pred = Dirichlet(torch.flatten(pri_pred_params))
+                    novelty[action] = kl_divergence(psi_pred, psi)
+
             # First compute psi_prime_params: what psi_params would be if updated 
             # with posterior predictive observation (this is the same procedure 
             # as in self.bayesian_learning(), except using o_pred instead of o).
             # Find the joint action index
             # FIXME: instead of argmax as if o_pred was one-hot, we should compute an expectation/soft update
-            joint_action_idx = [torch.argmax(self.q_o_u[u_i, factor_idx]).item() for factor_idx in range(n_agents)]
-            joint_action_idx = tuple(joint_action_idx)
-            
-            # Update based on observed action
-            ETA = 1
-            psi_prime_params = self.psi_params.clone()
-            psi_prime_params[joint_action_idx] += ETA  # FIXME: hardcoded ETA
+            elif False:
+                joint_action_idx = [torch.argmax(self.q_o_u[u_i, factor_idx]).item() for factor_idx in range(n_agents)]
+                joint_action_idx = tuple(joint_action_idx)
+                
+                # Update based on observed action
+                ETA = 1
+                psi_prime_params = self.psi_params.clone()
+                psi_prime_params[joint_action_idx] += ETA  # FIXME: hardcoded ETA
 
-            # Temporal discounting
-            psi_prime_params *= self.decay
-            psi_prime_params += 1e-9
-    
-            psi_given_o = Dirichlet(torch.flatten(psi_prime_params))
-            psi = Dirichlet(torch.flatten(self.psi_params))
-            novelty_action = kl_divergence(psi_given_o, psi)
-            novelty[u_i] = novelty_action
+                # Temporal discounting
+                psi_prime_params *= self.decay
+                psi_prime_params += 1e-9
+        
+                psi_given_o = Dirichlet(torch.flatten(psi_prime_params))
+                psi = Dirichlet(torch.flatten(self.psi_params))
+                novelty_action = kl_divergence(psi_given_o, psi)
+                novelty[u_i] = novelty_action
+
+            # A brute force approach that won't scale because it is exponential in the number of agents
+            else:
+                psi = Dirichlet(torch.flatten(self.psi_params))
+                novelty = torch.zeros((n_actions,))
+                for u_i in range(n_actions):
+
+                    # Compute the joint distribution (incremental Dirichlet concentration) of predicted actions
+                    joint_o_pred = torch.einsum(
+                        ','.join(chr(ord('i') + n) for n in range(n_agents)) 
+                        + '->' 
+                        + ''.join(chr(ord('i') + n) for n in range(n_agents)),
+                        *torch.unbind(self.q_o_u[u_i], dim=0))
+
+                    all_possible_joint_actions = torch.cartesian_prod(
+                        *[torch.arange(n_actions) for _ in range(n_agents)]
+                    )
+                    for joint_action in all_possible_joint_actions:  # This loop bad
+                        pri_pred_params = self.psi_params.clone()
+                        pri_pred_params[tuple(joint_action)] += 1
+                        psi_pred = Dirichlet(torch.flatten(pri_pred_params))
+                        novelty[u_i] += joint_o_pred[tuple(joint_action)] * kl_divergence(psi_pred, psi)
 
         EFE = EFE - novelty
 
