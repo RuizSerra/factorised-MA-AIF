@@ -320,6 +320,17 @@ class Agent:
         self.salience = salience
         self.pragmatic_value = pragmatic_value
 
+
+        # Define tolerance
+        tolerance = 1e-6  # Adjust based on acceptable floating-point error
+
+        # Assert that the second element is at least 1% bigger than the first element
+        assert self.pragmatic_value[1] > self.pragmatic_value[0] * 1.01 - tolerance, (
+            f"Dominated strategy has higher pragmatic value? "
+            f"First element: {self.pragmatic_value[0].item()}, "
+            f"Second element: {self.pragmatic_value[1].item()}"
+        )
+
         #Matrices of predicted s_preds (per action, stacked)
         self.opp_pred = torch.stack(opp_pred_per_action).squeeze()
         joint_distributions = []
