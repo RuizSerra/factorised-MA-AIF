@@ -215,18 +215,16 @@ class Agent:
                 
                 # p(u_{-i} | u_i)
                 # For each of my actions, what are the probabilities of the other agents action combos? e.g. p(CC | me = C), p(CD | me = C), p(DC | me = C), etc.
-                expected_probs = self.psi_params / self.psi_params.sum(dim=list(range(1, n_agents)), keepdim=True)  # p(u_{-i} | u_i)
-                assert expected_probs.ndimension() == n_agents, "Expected joint actions (F0) is not an n-agent dimensional tensor"
-                assert torch.prod(torch.tensor(expected_probs.shape[:-1])) == n_actions ** (n_agents-1), "# Expected joint action (F0) vectors != num_actions^(n_agents - 1)"
-                assert torch.allclose(expected_probs.sum(), torch.tensor(float(n_actions))), "Expected joint action probs (F0) do not sum to num actions."
-                assert torch.allclose(expected_probs[u_i].sum(), torch.tensor(1.0)), "Expected probs[action] (F0) tensor does not sum to 1."
+                conditional_joint_prior = self.psi_params / self.psi_params.sum(dim=list(range(1, n_agents)), keepdim=True)  # p(u_{-i} | u_i)
+                assert conditional_joint_prior.ndimension() == n_agents, "Expected joint actions (F0) is not an n-agent dimensional tensor"
+                assert torch.prod(torch.tensor(conditional_joint_prior.shape[:-1])) == n_actions ** (n_agents-1), "# Expected joint action (F0) vectors != num_actions^(n_agents - 1)"
+                assert torch.allclose(conditional_joint_prior.sum(), torch.tensor(float(n_actions))), "Expected joint action probs (F0) do not sum to num actions."
+                assert torch.allclose(conditional_joint_prior[u_i].sum(), torch.tensor(1.0)), "Expected probs[action] (F0) tensor does not sum to 1."
                 
                 ### ==== MY PREFERENCES OVER MY ACTIONS === ### -  [What I wish to observe me doing, given what I expect they will do]
                 if factor_idx == 0:  
                     #My action - 
                     s_pred = self.B(self.s[factor_idx], u_i)  # Predicted state q(s | s, u)
-                    # s_pred = torch.nn.functional.one_hot(u_i, num_classes=n_actions).float() #Option to take the actual known action
-                    assert torch.allclose(s_pred.sum(), torch.tensor(1.0)), "s_pred (F0) tensor does not sum to 1."
                     assert torch.allclose(s_pred, self.s[factor_idx], atol=1e-6), "s_pred (F0) does not equal my last fictitious play estimate"
                     # TODO: Should the above just use my actual action?
 
@@ -237,10 +235,9 @@ class Agent:
                     #Multiply joint payoffs by probability of joint action
                     log_C_modality = torch.tensordot(
                         self.log_C,  # (2, 2, 2)
-                        expected_probs[u_i],  # (2, 2)
+                        conditional_joint_prior[u_i],  # (2, 2)
                         dims=(indices_left, indices_right)
                     )
-                    assert log_C_modality.ndimension() == 1, "log_C_modality (F0) is not a 1-dimensional tensor."
                     
                 ### ==== MY PREFERENCES OVER THEIR ACTIONS === [what I wish to observe j doing, given what I plan on doing, and what I expect k will do]
                 else:  
@@ -251,7 +248,7 @@ class Agent:
                         Special case for 2 agents: if we were to marginalise there would be no distribution left, so we index straight from the tensors
                         '''
                         log_C_modality = self.log_C[u_i]
-                        s_pred = expected_probs[u_i].squeeze()
+                        s_pred = conditional_joint_prior[u_i].squeeze()
                     elif n_agents > 2:
                         '''
                         General case for n agents: marginalise out the current factor agent to get expected probs for all other agents (not i, not j)
@@ -259,7 +256,7 @@ class Agent:
                                 p(u_{-j-i}|u_i) = p(u_k | u_i) = sum_{u_j} p(u_j, u_k | u_i) = sum_{u_j} p(u_{-i} | u_i)
                         '''
                         # Marginalise out the current factor agent to get expected probs for all other agents (not i, not j)
-                        expected_probs_marginal = expected_probs[u_i].sum(dim=factor_idx-1, keepdim=True)  # p(u_{-j-i}|u_i) = sum_{u_j} p(u_{-i} | u_i)
+                        conditional_joint_prior_marginal = conditional_joint_prior[u_i].sum(dim=factor_idx-1, keepdim=True)  # p(u_{-j-i}|u_i) = sum_{u_j} p(u_{-i} | u_i)
                     
                         # Indices for tensor dot product
                         indices_left = list(range(n_agents-1))      # [0, ..., n-2]
@@ -268,27 +265,25 @@ class Agent:
 
                         log_C_modality = torch.tensordot(
                             self.log_C[u_i], # (2, 2)
-                            expected_probs_marginal.squeeze(),   # (2,)
+                            conditional_joint_prior_marginal.squeeze(),   # (2,)
                             dims=(indices_left, indices_right)
                         )
 
                         # Compute the posterior predictive state for the current factor agent
                         indices = list(range(n_agents-1))   # [0, ..., n-1]  because we've removed i (ego; conditional)
                         indices.remove(factor_idx-1)        # Remove the current factor index  [0, ..., n-1] \ (j-1)  --> (j-1) because we've removed i (ego; conditional)
-                        s_pred = expected_probs[u_i].sum(dim=indices)  # p(u_j | u_i) = sum_{u_{-i-j}} p(u_j, u_{-i-j} | u_i)
-
-                    assert log_C_modality.ndimension() == 1, "log_C_modality (F_j) is not a 1-dimensional tensor."
-                    assert torch.allclose(s_pred.sum(), torch.tensor(1.0)), "s_pred (F_j) tensor does not sum to 1."                          
-            
-                # Posterior predictive observation(s) for both factors: THIS SHOULD BE A VECTOR EACH TIME
-                o_pred = self.A[factor_idx].T @ s_pred
-                assert torch.allclose(o_pred.sum(), torch.tensor(1.0)), "o_pred (F_j) tensor does not sum to 1."
-                
+                        s_pred = conditional_joint_prior[u_i].sum(dim=indices)  # p(u_j | u_i) = sum_{u_{-i-j}} p(u_j, u_{-i-j} | u_i)
+                        
                 self.opp_pred[u_i, factor_idx] = s_pred
-       
-                assert log_C_modality.ndimension() == 1, "log_C_modality (main) is not a 1-dimensional tensor."
-                # assert torch.allclose(torch.exp(log_C_modality).sum(), torch.FloatTensor(n_agents)), "C does not sum to n agents." Legit check for C that each modality is a prob dist? 
-
+                assert torch.allclose(s_pred.sum(), torch.tensor(1.0)), f"s_pred (factor {factor_idx}) tensor does not sum to 1."
+                assert log_C_modality.ndimension() == 1, f"log_C_modality (factor {factor_idx}) is not a 1-dimensional tensor."
+                # assert torch.allclose(torch.exp(log_C_modality).sum(), torch.FloatTensor(n_agents)), "C does not sum to n agents."  # TODO: Legit check for C that each modality is a prob dist? 
+            
+                # Posterior predictive observation(s) for both factors
+                o_pred = self.A[factor_idx].T @ s_pred
+                assert torch.allclose(o_pred.sum(), torch.tensor(1.0)), f"o_pred (factor {factor_idx}) tensor does not sum to 1."
+                assert o_pred.shape == (n_actions, ), f"o_pred (factor {factor_idx}) tensor is not the correct shape."
+                
                 # EFE = Expected ambiguity + risk 
                 EFE[u_i] += H @ s_pred + (o_pred @ (torch.log(o_pred + 1e-9) - log_C_modality))
 
