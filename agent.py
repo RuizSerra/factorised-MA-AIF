@@ -347,6 +347,7 @@ class Agent:
 
             # A brute force approach that won't scale because it is exponential in the number of agents
             else:
+                ETA = 1  # FIXME: hardcoded ETA
                 psi = Dirichlet(torch.flatten(self.psi_params))
                 novelty = torch.zeros((n_actions,))
                 for u_i in range(n_actions):
@@ -363,7 +364,9 @@ class Agent:
                     )
                     for joint_action in all_possible_joint_actions:  # This loop bad
                         pri_pred_params = self.psi_params.clone()
-                        pri_pred_params[tuple(joint_action)] += 1
+                        pri_pred_params[tuple(joint_action)] += ETA
+                        pri_pred_params *= self.decay
+                        pri_pred_params += 1e-9
                         psi_pred = Dirichlet(torch.flatten(pri_pred_params))
                         novelty[u_i] += joint_o_pred[tuple(joint_action)] * kl_divergence(psi_pred, psi)
 
