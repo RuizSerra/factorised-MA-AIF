@@ -270,3 +270,15 @@ prisoners_dilemma_4player = torch.tensor([
 ])
 
 
+# Ising game
+J = 1  # Example value for J
+ising_game_4player = torch.tensor([
+    # s_i = +1, Player 1
+    [[[ 3 * J,  J], [ J, -J]], 
+     [[ J, -J], [-J, -3 * J]]],
+    
+    # s_i = -1, Player 1
+    [[[-3 * J, -J], [-J,  J]], 
+     [[-J,  J], [ J,  3 * J]]]
+])
+

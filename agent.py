@@ -148,7 +148,7 @@ class Agent:
         return summary
 
     # ========================================
-    # Perception 
+    # Perception (mean-field)
     # =======================================
     def infer_state(self, o, learning_rate=1e-2, num_iterations=100, num_samples=100):
         for factor_idx, _ in enumerate(self.s):
@@ -191,6 +191,10 @@ class Agent:
 
         return self.s
 
+
+
+
+
     # ========================================
     # Action 
     # =======================================
@@ -216,27 +220,27 @@ class Agent:
                 
                 ### ==== MY PREFERENCES OVER MY ACTIONS === ### -  [What I wish to observe me doing, given what I expect they will do]
                 if factor_idx == 0:  
-                    #My action - 
+                    #PPS my action
                     s_pred = self.B(self.s[factor_idx], u_i)  # Predicted state q(s | s, u)
                     # s_pred = torch.nn.functional.one_hot(u_i, num_classes=n_actions).float() #Option to take the actual known action
                     assert torch.allclose(s_pred.sum(), torch.tensor(1.0)), "s_pred (F0) tensor does not sum to 1."
                     assert torch.allclose(s_pred, self.s[factor_idx], atol=1e-6), "s_pred (F0) does not equal my last fictitious play estimate"
                     #Should the above just use my actual action?
 
-                    # PPS 
-                    # For each of my actions, what are the probabilities of the other agents action combos? e.g. p(CC | me = C), p(CD | me = C), p(DC | me = C), etc.
+
+                    # Their (specific opponent's) expected action, given my actual action and others expected action. p(u_j | u_i = [action]) OR p(u_j | u_i = [action], u_k)
+                    #Or is it the expected joint actions of all opponents, given my action p(u_j, u_k ... u_n | u_i [action])
                     expected_probs = self.C_opp_params / self.C_opp_params.sum(dim=list(range(1, n_agents)), keepdim=True)   # p(u_{-i} | u_i)
                     assert expected_probs.ndimension() == n_agents, "Expected joint actions (F0) is not an n-agent dimensional tensor"
                     assert torch.prod(torch.tensor(expected_probs.shape[:-1])) == n_actions ** (n_agents-1), "# Expected joint action (F0) vectors != num_actions^(n_agents - 1)"
                     assert torch.allclose(expected_probs.sum(), torch.tensor(float(n_actions))), "Expected joint action probs (F0) do not sum to num actions."
                     assert torch.allclose(expected_probs[u_i].sum(), torch.tensor(1.0)), "Expected probs[action] (F0) tensor does not sum to 1."
-                    # This one isn't technically conditional probabilities, so not quite clocking it.
 
                     # Indices for tensor dot product
-                    indices_left = list(range(1, n_agents))     # [1, ..., n-1] 
-                    indices_right = list(range(n_agents - 1))   # [0, ..., n-2]
+                    indices_left = list(range(1, n_agents))     # [1, ..., n-1]  #Summing over log C
+                    indices_right = list(range(n_agents - 1))   # [0, ..., n-2] #Summing over expected probs
                     
-                    #Multiply joint payoffs by probability of joint action
+                    #Multiply joint payoffs by probability of joint action: leaving exactly one uncontracted dimension in each tensor
                     log_C_modality = torch.tensordot(
                         self.log_C,  # (2, 2, 2)
                         expected_probs[u_i],  # (2, 2)
@@ -248,7 +252,7 @@ class Agent:
                 ### ==== MY PREFERENCES OVER THEIR ACTIONS === [what I wish to observe j doing, given what I plan on doing, and what I expect k will do]
                 else:  
 
-                    # #For each of my actions, what are the probabilities of the other agents action combos? e.g. p(CC | me = C), p(CD | me = C), p(DC | me = C), etc.
+                    # The expected joint actions of all opponents, given my action p(u_j, u_k ... u_n | u_i [action])
                     expected_probs = self.C_opp_params / self.C_opp_params.sum(dim=list(range(1, n_agents)), keepdim=True)  # p(u_{-i} | u_i)
                     assert expected_probs.ndimension() == n_agents, "Expected joint actions (F_j) is not an n-agent dimensional tensor"
                     assert torch.prod(torch.tensor(expected_probs.shape[:-1])) == n_actions ** (n_agents-1), "# Expected joint action (F_j) vectors != num_actions^(n_agents - 1)"
@@ -256,6 +260,7 @@ class Agent:
                     assert torch.allclose(expected_probs[u_i].sum(), torch.tensor(1.0)), "Expected probs[action] (F_j) tensor does not sum to 1."
 
                     # Compute this factor's preferences and posterior predictive state
+                    # Marginal: p(u_j | u_i = [action])
                     if n_agents == 2:
                         '''
                         Special case for 2 agents: if we were to marginalise there would be no distribution left, so we index straight from the tensors
@@ -263,6 +268,7 @@ class Agent:
                         log_C_modality = self.log_C[u_i]
                         s_pred = expected_probs[u_i].squeeze()
                     elif n_agents > 2:
+                    #First get p(u_k, ... u_n | u_i) (and ignore p(u_j)?)
                         '''
                         General case for n agents: marginalise out the current factor agent to get expected probs for all other agents (not i, not j)
                             Example for n=3 agents (i, j, k): 
