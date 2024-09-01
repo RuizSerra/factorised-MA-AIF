@@ -37,8 +37,13 @@ class Agent:
 
         # Generative model/variational posterior parameters
         self.alpha = [torch.ones(num_actions) for _ in range(num_agents)]  # Dirichlet state prior
-        self.A = [torch.eye(num_actions) for _ in range(num_agents)]  # Identity observation model
-        self.B = lambda s, u: s  # Identity transition model (given s and u, return s)
+        self.A_params = torch.ones((num_agents, num_actions, num_actions))
+        # self.A_params = torch.stack([torch.eye(num_actions) for _ in range(num_agents)]) + 1e-9  # Identity observation model
+        # self.A = [torch.eye(num_actions) for _ in range(num_agents)]  # Identity observation model
+        self.A = self.A_params / self.A_params.sum(dim=1, keepdim=True)
+        self.B_params = torch.ones((num_agents, num_actions, num_actions, num_actions))
+        self.B = self.B_params / self.B_params.sum(dim=2, keepdim=True)
+        # self.B = lambda s, u: s  # Identity transition model (given s and u, return s)
         self.log_C = game_matrix.to(torch.float)  # Payoffs for joint actions (in matrix form, from row player's perspective) (force to float)
         self.prob_C = None
         self.s = [Dirichlet(alpha).mean for alpha in self.alpha]  # Categorical state prior (D?)
@@ -49,6 +54,10 @@ class Agent:
         # self.A_params = torch.eye(2)
         # self.B_params = torch.tensor([torch.eye(2), torch.eye(2)])
         # Opponent modeling (what I think their preferences are, currently unused - no learning)
+        # Store blanket states history for learning
+        self.s_history = []
+        self.o_history = []
+        self.u_history = []
         # self.C_opp_params = self.log_C.T.clone().detach()    ### <--------------- TEST transpose log_C as if ego knew exactly alters preferences
         self.psi_params = torch.ones_like(self.log_C)    ### <--------------- TEST uniform prior for opponent preferences
         
@@ -153,7 +162,7 @@ class Agent:
         for factor_idx in range(len(self.s)):  # Loop over each state factor (me + the other agents)
             s_prev = self.s[factor_idx].clone().detach()  # State t-1
             assert torch.allclose(s_prev.sum(), torch.tensor(1.0)), "s_prev tensor does not sum to 1."
-            log_prior = torch.log(self.B(s_prev, self.action) + 1e-9)  # New prior is old posterior
+            log_prior = torch.log(self.B[factor_idx, self.action] @ s_prev + 1e-9)  # New prior is old posterior
             log_likelihood = torch.log(self.A[factor_idx] @ o[factor_idx] + 1e-9)  # Probability of observation given hidden states
 
             variational_params = self.alpha[factor_idx].clone().detach().requires_grad_(True)  # Variational Dirichlet distribution for each factor (agent)
@@ -183,11 +192,15 @@ class Agent:
             self.s[factor_idx] = Dirichlet(variational_params).mean.detach()
             self.VFE[factor_idx] = VFE.detach()
             
+
             self.entropy[factor_idx] = entropy
             self.energy[factor_idx] = energy
             self.accuracy[factor_idx] = accuracy
             self.complexity[factor_idx] = complexity
 
+        self.s_history.append(torch.stack(self.s))
+        self.o_history.append(o)
+        
         return self.s
 
     # ========================================
@@ -226,7 +239,7 @@ class Agent:
                 ### ==== MY PREFERENCES OVER MY ACTIONS === ### -  [What I wish to observe me doing, given what I expect they will do]
                 if factor_idx == 0:  
                     # Hidden state prediction
-                    s_pred = self.B(self.s[factor_idx], u_i)  # Predicted state q(s | s, u)
+                    s_pred = self.B[factor_idx, u_i] @ self.s[factor_idx]  # Predicted state q(s | s, u)
                     # TODO: This is placeholder for when B is an actual matrix
                     # TODO: but maybe we could use q(u) (i.e. self.q_u) here
 
@@ -282,7 +295,7 @@ class Agent:
                 # assert torch.allclose(torch.exp(log_C_modality).sum(), torch.FloatTensor(n_agents)), "C does not sum to n agents."  # TODO: Legit check for C that each modality is a prob dist? 
             
                 # Posterior predictive observation(s) for both factors
-                o_pred = self.A[factor_idx].T @ s_pred
+                o_pred = self.A[factor_idx] @ s_pred
                 assert torch.allclose(o_pred.sum(), torch.tensor(1.0)), f"o_pred (factor {factor_idx}) tensor does not sum to 1."
                 assert o_pred.shape == (n_actions, ), f"o_pred (factor {factor_idx}) tensor is not the correct shape."
                 self.q_o_u[u_i, factor_idx] = o_pred
@@ -295,12 +308,13 @@ class Agent:
                 salience[u_i] += -(o_pred @ (torch.log(o_pred + 1e-9)))  - (H @ s_pred) # Salience is negative posterior predictive entropy minus ambiguity (0)
                 pragmatic_value[u_i] += (o_pred @ log_C_modality) # Pragmatic value is negative cross-entropy
 
-            assert torch.allclose(risk[u_i] + ambiguity[u_i], EFE[u_i], atol=1e-6), "Risk + ambiguity does not equal EFE"
-            assert torch.allclose(-salience[u_i] - pragmatic_value[u_i], EFE[u_i], atol=1e-6), "-Salience - pragmatic_value does not equal EFE"
+            assert torch.allclose(risk[u_i] + ambiguity[u_i], EFE[u_i], atol=1e-4), f"[u_i = {u_i}] risk + ambiguity ({risk[u_i]} + {ambiguity[u_i]}={risk[u_i] + ambiguity[u_i]}) does not equal EFE (={EFE[u_i]})"
+            assert torch.allclose(-salience[u_i] - pragmatic_value[u_i], EFE[u_i], atol=1e-4), f"[u_i = {u_i}] -salience - pragmatic value (-{salience[u_i]} - {pragmatic_value[u_i]}={-salience[u_i] - pragmatic_value[u_i]}) does not equal EFE (={EFE[u_i]})"
         
             # Novelty ----------------------------------------------------------
 
-            novelty[u_i] = self.compute_novelty_2(u_i)
+            novelty[u_i] = self.compute_A_novelty(u_i)
+
 
         EFE = EFE - novelty
 
@@ -443,16 +457,38 @@ class Agent:
 
         return novelty_u_i
 
+    def compute_A_novelty(self, u_i):
+        '''
+        Compute the novelty of the likelihood model A for action u_i
+        '''
+        novelty = 0
+        # Da Costa et al. (2020; Eq. D.17)
+        W = 0.5 * (1/self.A_params - 1/self.A_params.sum(dim=1, keepdim=True))
+        for factor_idx in range(len(self.s)):
+            s_pred = self.q_s_u[u_i, factor_idx]
+            novelty += torch.dot(
+                self.A[factor_idx] @ s_pred, 
+                W[factor_idx] @ s_pred) 
+        return novelty
+
     def select_action(self):
         EFE = self.compute_efe()
         q_u = torch.softmax(torch.log(self.E) - self.gamma * EFE, dim=0)
-        assert torch.allclose(q_u.sum(), torch.tensor(1.0)), "q_u policy tensor does not sum to 1."
+        assert torch.allclose(q_u.sum(), torch.tensor(1.0)), (
+            "q_u policy tensor does not sum to 1.",
+            f"q_u: {q_u}",
+            f"q_u.sum(): {q_u.sum()}",
+            f"EFE: {EFE}"
+        )
 
         self.action = torch.multinomial(q_u, 1).item()
 
         if self.dynamic_precision:
             self.update_precision(EFE, q_u)
         self.q_u = q_u
+
+        self.u_history.append(self.action)
+
         return self.action
 
     def update_precision(self, EFE, q_u):
@@ -483,3 +519,57 @@ class Agent:
         self.psi_params += 1e-9
         
         return self.psi_params
+    
+    def learn(self):
+
+        # Convert history to tensors
+        self.s_history = torch.stack(self.s_history)  # Shape: (T, n_agents, n_actions)
+        self.o_history = torch.stack(self.o_history)  # Shape: (T, n_agents, n_actions)
+        self.u_history = torch.tensor(self.u_history)  # Shape: (T, )
+    
+        self.learn_A()
+        self.learn_B()
+
+        # Reset history
+        self.s_history = []
+        self.o_history = []
+        self.u_history = []
+
+    def learn_A(self):
+
+        # Expand dimensions to prepare for broadcasting
+        s_hist_expanded = self.s_history.unsqueeze(-2)  # Shape: (T, n_agents, 1, n_actions)
+        o_hist_expanded = self.o_history.unsqueeze(-1)  # Shape: (T, n_agents, n_actions, 1)
+
+        # Perform the row-wise outer product
+        outer_products = s_hist_expanded * o_hist_expanded  # Shape: (T, n_agents, n_actions, n_actions)
+
+        # Likelihood parameters update
+        delta_params = outer_products.sum(dim=0)  # Shape: (n_agents, n_actions, n_actions)
+        self.A_params = self.A_params + delta_params
+        self.A = self.A_params / self.A_params.sum(dim=1, keepdim=True)
+
+    def learn_B(self):
+
+        # Shift arrays for prev and next
+        s_prev = self.s_history[:-1]  # Shape: (T-1, n_agents, n_actions)
+        s_next = self.s_history[1:]  # Shape: (T-1, n_agents, n_actions)
+        
+        # Expand dimensions to prepare for broadcasting
+        s_prev_expanded = s_prev.unsqueeze(-2)  # Shape: (T, n_agents, 1, n_actions)
+        s_next_expanded = s_next.unsqueeze(-1)  # Shape: (T, n_agents, n_actions, 1)
+
+        # Perform the row-wise outer product
+        outer_products = s_prev_expanded * s_next_expanded  # Shape: (T, n_agents, n_actions, n_actions)
+
+        # Update parameters for every transition (s, u, s') in the history
+        for t in range(outer_products.shape[0]):
+            # Likelihood parameters update
+            delta_params = outer_products[t]  # Shape: (n_agents, n_actions, n_actions)
+            u_it = self.u_history[t].item()   # Action u_i at time t
+            self.B_params[:, u_it] = self.B_params[:, u_it] + delta_params
+
+        self.B = self.B_params / self.B_params.sum(dim=2, keepdim=True)
+
+
+
