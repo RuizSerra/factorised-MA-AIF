@@ -49,7 +49,7 @@ matching_pennies_2player = torch.tensor(    # Matching pennies (row player payof
 )                                           #       e.g., to load, game_matrix=[(-1)**i * matching_pennies_2player for i in range(num_players)][i]
 
 
-#Weightlifting game
+#Weightlifting game (Yamamoto)
 # Define parameters for the Weightlifting Game
 c = 1.0  # Cost of cooperation
 r = 3.0  # Reward for success

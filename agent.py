@@ -65,6 +65,7 @@ class Agent:
         self.salience = torch.zeros(num_actions) #for each possible action
         self.pragmatic_value = torch.zeros(num_actions)
         self.novelty = torch.zeros(num_actions)
+        self.information_gain = torch.zeros(num_actions)
 
         self.expected_EFE = [None]  # Expected EFE averaged over my expected 
 
@@ -150,7 +151,7 @@ class Agent:
     # Perception 
     # =======================================
     def infer_state(self, o, learning_rate=1e-2, num_iterations=100, num_samples=100):
-        for factor_idx in range(len(self.s)):  # Loop over each state factor (me + the other agents)
+        for factor_idx, _ in enumerate(self.s):
             s_prev = self.s[factor_idx].clone().detach()  # State t-1
             assert torch.allclose(s_prev.sum(), torch.tensor(1.0)), "s_prev tensor does not sum to 1."
             log_prior = torch.log(self.B(s_prev, self.action) + 1e-9)  # New prior is old posterior
@@ -197,7 +198,6 @@ class Agent:
         n_actions = self.E.shape[0]  # Scalar (number of actions)
         n_agents = self.C_opp_params.dim()  # Number of agents (including self)
         opp_pred_per_action = []  # List to hold the predictions for each action
-
         
         EFE = torch.zeros(n_actions)  # n-action length vector of zeros
         ambiguity = torch.zeros(n_actions)  # n-action length vector of zeros
@@ -210,7 +210,7 @@ class Agent:
         for u_i in torch.arange(n_actions):
             opp_pred = []
             # For each factor, the expected value is the value of the states (log C), multiplied by the action probabilities of the opponent
-            for factor_idx in range(len(self.s)):
+            for factor_idx, _ in enumerate(self.s):
                 H = -torch.diag(self.A[factor_idx] @ torch.log(self.A[factor_idx] + 1e-9))  # Conditional (pseudo?) entropy (of the generated emissions matrix) - ZERO
                 assert H.ndimension() == 1, "log_C_modality (F0) is not a 1-dimensional tensor"
                 
@@ -346,13 +346,15 @@ class Agent:
             novelty.append(novelty_action)
 
         novelty = torch.stack(novelty)
+        assert torch.all(novelty > 0), "All elements of the novelty tensor should be positive"
         self.novelty = novelty 
 
         assert torch.allclose(risk + ambiguity, EFE, atol=1e-6), "Risk + ambiguity does not equal EFE"
         assert torch.allclose(-salience - pragmatic_value, EFE, atol=1e-6), "-Salience - pragmatic_value does not equal EFE"
 
         EFE = EFE - novelty
-        # print(f'Novelty: {novelty}')
+        information_gain = EFE - (-salience - pragmatic_value)
+        self.information_gain = information_gain
 
         #Summed over each factor (for each action)
         self.EFE = EFE
