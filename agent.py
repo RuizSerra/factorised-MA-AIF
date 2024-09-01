@@ -546,8 +546,26 @@ class Agent:
 
         # Likelihood parameters update
         delta_params = outer_products.sum(dim=0)  # Shape: (n_agents, n_actions, n_actions)
-        self.A_params = self.A_params + delta_params
-        self.A = self.A_params / self.A_params.sum(dim=1, keepdim=True)
+        self.A_params = self.A_params + delta_params  # Shape: (n_agents, n_actions, n_actions)
+        self.A_posterior = self.A_params / self.A_params.sum(dim=1, keepdim=True)  # Shape: (n_agents, n_actions, n_actions)
+
+        # Bayesian Model Reduction ---------------------------------------------
+        shrinkage = 0.5
+        A_reduced_params = torch.softmax((1/shrinkage)*self.A_params, dim=-1)
+        self.A_reduced = A_reduced_params / A_reduced_params.sum(dim=1, keepdim=True)
+
+        # Compute the ratio of the reduced model to the full model
+        prior_ratio = self.A_reduced / self.A_posterior  # Shape: (n_agents, n_actions, n_actions)
+
+        # Compute the expectation under the posterior distribution
+        log_evidence_difference = torch.log((prior_ratio * self.A_posterior).sum(dim=[1, 2]))  # Weighted sum over the action dimensions
+
+        for factor_idx in range(len(self.s)):
+            if log_evidence_difference[factor_idx] > 0:
+                self.A[factor_idx] = self.A_reduced[factor_idx]
+            else:
+                print(f'Evidence difference (factor {factor_idx}): {log_evidence_difference[factor_idx]}')
+                self.A[factor_idx] = self.A_posterior[factor_idx]
 
     def learn_B(self):
 
