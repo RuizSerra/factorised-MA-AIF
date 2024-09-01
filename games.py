@@ -49,6 +49,28 @@ matching_pennies_2player = torch.tensor(    # Matching pennies (row player payof
 )                                           #       e.g., to load, game_matrix=[(-1)**i * matching_pennies_2player for i in range(num_players)][i]
 
 
+#Weightlifting game
+# Define parameters for the Weightlifting Game
+c = 1.0  # Cost of cooperation
+r = 3.0  # Reward for success
+f = 2.0  # Fine for failure
+
+# Success probabilities based on the number of cooperators
+p0 = 0.0  # Probability of success with 0 cooperators
+p1 = 0.5  # Probability of success with 1 cooperator
+p2 = 1.0  # Probability of success with 2 cooperators
+
+# Payoff matrix construction
+weightlifting_game_2player = torch.tensor([
+    [r * p2 - f * (1 - p2) - c, r * p1 - f * (1 - p1) - c],  # (C, C) and (C, D)
+    [r * p1 - f * (1 - p1), r * p0 - f * (1 - p0)]           # (D, C) and (D, D)
+])
+
+# To ensure numerical stability, add a small epsilon if necessary
+EPSILON = 1e-9
+weightlifting_game_2player += EPSILON
+
+
 
 #Fisherman's Dilemma (Bowles)
 alpha = 1.0  # Temptation surplus: Set this to any desired value
