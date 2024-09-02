@@ -38,12 +38,17 @@ class Agent:
         # Generative model/variational posterior parameters
         self.alpha = [torch.ones(num_actions) for _ in range(num_agents)]  # Dirichlet state prior
         self.A_params = torch.ones((num_agents, num_actions, num_actions))
-        # self.A_params = torch.stack([torch.eye(num_actions) for _ in range(num_agents)]) + 1e-9  # Identity observation model
+        self.A_params = torch.stack([torch.eye(num_actions) for _ in range(num_agents)]) + 1e-9  # Identity observation model
         # self.A = [torch.eye(num_actions) for _ in range(num_agents)]  # Identity observation model
         self.A = self.A_params / self.A_params.sum(dim=1, keepdim=True)
-        self.B_params = torch.ones((num_agents, num_actions, num_actions, num_actions))
-        self.B = self.B_params / self.B_params.sum(dim=2, keepdim=True)
         # self.B = lambda s, u: s  # Identity transition model (given s and u, return s)
+        # self.B_params = torch.ones((num_agents, num_actions, num_actions, num_actions))
+        # self.B = self.B_params / self.B_params.sum(dim=2, keepdim=True)
+        self.B = torch.stack([
+            torch.eye(num_actions) 
+            for _ in range(num_actions) 
+            for _ in range(num_agents)
+        ]).reshape(num_agents, num_actions, num_actions, num_actions)
         self.log_C = game_matrix.to(torch.float)  # Payoffs for joint actions (in matrix form, from row player's perspective) (force to float)
         self.prob_C = None
         self.s = [Dirichlet(alpha).mean for alpha in self.alpha]  # Categorical state prior (D?)
@@ -219,7 +224,7 @@ class Agent:
         salience = torch.zeros(n_actions)  # n-action length vector of zeros
         pragmatic_value = torch.zeros(n_actions)  # n-action length vector of zeros
         
-        novelty = torch.empty((n_actions,))
+        novelty = torch.zeros((n_actions,))
 
         # For each action
         for u_i in range(n_actions):
@@ -312,9 +317,7 @@ class Agent:
             assert torch.allclose(-salience[u_i] - pragmatic_value[u_i], EFE[u_i], atol=1e-4), f"[u_i = {u_i}] -salience - pragmatic value (-{salience[u_i]} - {pragmatic_value[u_i]}={-salience[u_i] - pragmatic_value[u_i]}) does not equal EFE (={EFE[u_i]})"
         
             # Novelty ----------------------------------------------------------
-
-            novelty[u_i] = self.compute_A_novelty(u_i)
-
+            # novelty[u_i] = self.compute_A_novelty(u_i)
 
         EFE = EFE - novelty
 
@@ -527,8 +530,9 @@ class Agent:
         self.o_history = torch.stack(self.o_history)  # Shape: (T, n_agents, n_actions)
         self.u_history = torch.tensor(self.u_history)  # Shape: (T, )
     
-        self.learn_A()
-        self.learn_B()
+        # self.learn_A()
+        # self.learn_B()
+        # self.learn_Psi()
 
         # Reset history
         self.s_history = []
@@ -544,28 +548,30 @@ class Agent:
         # Perform the row-wise outer product
         outer_products = s_hist_expanded * o_hist_expanded  # Shape: (T, n_agents, n_actions, n_actions)
 
-        # Likelihood parameters update
+        # Posterior parameters
         delta_params = outer_products.sum(dim=0)  # Shape: (n_agents, n_actions, n_actions)
-        self.A_params = self.A_params + delta_params  # Shape: (n_agents, n_actions, n_actions)
-        self.A_posterior = self.A_params / self.A_params.sum(dim=1, keepdim=True)  # Shape: (n_agents, n_actions, n_actions)
+        A_posterior_params = self.A_params + delta_params  # Shape: (n_agents, n_actions, n_actions)
 
         # Bayesian Model Reduction ---------------------------------------------
-        shrinkage = 0.1
-        A_reduced_params = torch.softmax((1/shrinkage)*self.A_params, dim=-1)
-        self.A_reduced = A_reduced_params / A_reduced_params.sum(dim=1, keepdim=True)
+        shrinkage = 0.8
+        A_reduced_params = torch.softmax((1/shrinkage)*self.A_params, dim=-2)
+        # A_reduced_params = shrinkage * self.A_params 
 
-        # Compute the ratio of the reduced model to the full model
-        prior_ratio = self.A_reduced / self.A_posterior  # Shape: (n_agents, n_actions, n_actions)
-
-        # Compute the expectation under the posterior distribution
-        log_evidence_difference = torch.log((prior_ratio * self.A_posterior).sum(dim=[1, 2]))  # Weighted sum over the action dimensions
-
+        # Update model parameters if they reduce the free energy
         for factor_idx in range(len(self.s)):
-            # print(f'Evidence difference (factor {factor_idx}): {log_evidence_difference[factor_idx]}')
-            if log_evidence_difference[factor_idx] < 1:
-                self.A[factor_idx] = self.A_reduced[factor_idx]
-            else:  # FIXME: nan
-                self.A[factor_idx] = self.A_posterior[factor_idx]
+            delta_F = delta_free_energy(
+                A_posterior_params[factor_idx].flatten(), 
+                self.A_params[factor_idx].flatten(), 
+                A_reduced_params[factor_idx].flatten()
+            )
+            if delta_F < 0:
+                # Reduced model is preferred -> replace full model with reduced model
+                self.A_params[factor_idx] = A_reduced_params[factor_idx]
+            else:
+                # Full model is preferred -> update posterior
+                self.A_params[factor_idx] = A_posterior_params[factor_idx]
+        
+        self.A = self.A_params / self.A_params.sum(dim=1, keepdim=True)  # Shape: (n_agents, n_actions, n_actions)
 
     def learn_B(self):
 
@@ -589,5 +595,68 @@ class Agent:
 
         self.B = self.B_params / self.B_params.sum(dim=2, keepdim=True)
 
+    def learn_Psi(self, eta=1):
+
+        psi_posterior_params = self.psi_params.clone()
+
+        for o in self.o_history:
+        
+            # Find the joint action index
+            joint_action_idx = [torch.argmax(o[agent]).item() for agent in range(self.psi_params.dim())]
+            joint_action_idx = tuple(joint_action_idx)
+            
+            # Update based on observed action
+            psi_posterior_params[joint_action_idx] += eta #/ self.C_opp_params.numel()
+
+        # Bayesian Model Reduction ---------------------------------------------
+        # shrinkage = 0.8
+        # psi_reduced_params = torch.softmax(
+        #     (1/shrinkage) * self.psi_params.flatten(), 
+        #     dim=-1).reshape(self.psi_params.shape)
+        psi_reduced_params = self.psi_params ** (1/1.3) + 1e-9
+
+        # Update model parameters if they reduce the free energy
+        delta_F = delta_free_energy(
+            psi_posterior_params.flatten(), 
+            self.psi_params.flatten(), 
+            psi_reduced_params.flatten()
+        )
+        if delta_F < 0:
+            # Reduced model is preferred -> replace full model with reduced model
+            self.psi_params = psi_reduced_params
+        else:
+            # Full model is preferred -> update posterior
+            self.psi_params = psi_posterior_params
 
 
+def multivariate_beta(alpha):
+    """
+    Compute the multivariate Beta function B(alpha).
+    Args:
+    - alpha (torch.Tensor): 1D tensor of concentration parameters alpha (shape: K)
+    Returns:
+    - beta_value (torch.Tensor): The computed multivariate Beta function value
+    """
+    gamma_sum = torch.lgamma(alpha.sum())  # log(Gamma(sum(alpha)))
+    gamma_individual = torch.lgamma(alpha).sum()  # sum(log(Gamma(alpha_i)))
+    
+    return torch.exp(gamma_sum - gamma_individual)
+
+def delta_free_energy(a_posterior, a_prior, a_reduced):
+    """
+    Compute the change in free energy (ΔF) using Bayesian Model Reduction.
+    Args:
+    - a_prior (torch.Tensor): 1D tensor of prior concentration parameters alpha (shape: K)
+    - a_posterior (torch.Tensor): 1D tensor of posterior concentration parameters alpha (shape: K)
+    - a_reduced (torch.Tensor): 1D tensor of reduced concentration parameters alpha (shape: K)
+    Returns:
+    - delta_F (torch.Tensor): The change in free energy ΔF
+    """
+    B_a_posterior = multivariate_beta(a_posterior)
+    B_a_prior = multivariate_beta(a_prior)
+    B_a_reduced = multivariate_beta(a_reduced)
+    B_diff = multivariate_beta(a_posterior + a_reduced - a_prior)
+    
+    delta_F = torch.log(B_a_posterior) + torch.log(B_a_reduced) - torch.log(B_a_prior) - torch.log(B_diff)
+    
+    return delta_F
