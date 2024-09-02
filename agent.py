@@ -31,40 +31,31 @@ class Agent:
 
         # Generative model hyperparameters
         self.game_matrix = game_matrix.to(torch.float)  # Rewards from row player's perspective (force to float)
-        # self.game_matrix = (game_matrix / game_matrix.sum()) #Input probabilities instead instead of log rewards?
         num_actions = game_matrix.shape[0]  # Number of actions (assuming symmetrical actions)
         num_agents = game_matrix.ndim  # Number of players (rank of game tensor)
 
         # Generative model/variational posterior parameters
         self.alpha = [torch.ones(num_actions) for _ in range(num_agents)]  # Dirichlet state prior
         self.A_params = torch.ones((num_agents, num_actions, num_actions))
-        self.A_params = torch.stack([torch.eye(num_actions) for _ in range(num_agents)]) + 1e-9  # Identity observation model
+        # self.A_params = torch.stack([torch.eye(num_actions) for _ in range(num_agents)]) + 1e-9  # Identity observation model
         # self.A = [torch.eye(num_actions) for _ in range(num_agents)]  # Identity observation model
         self.A = self.A_params / self.A_params.sum(dim=1, keepdim=True)
-        # self.B = lambda s, u: s  # Identity transition model (given s and u, return s)
         # self.B_params = torch.ones((num_agents, num_actions, num_actions, num_actions))
-        # self.B = self.B_params / self.B_params.sum(dim=2, keepdim=True)
-        self.B = torch.stack([
+        self.B_params = torch.stack([
             torch.eye(num_actions) 
             for _ in range(num_actions) 
             for _ in range(num_agents)
         ]).reshape(num_agents, num_actions, num_actions, num_actions)
+        self.B = self.B_params / self.B_params.sum(dim=2, keepdim=True)
         self.log_C = game_matrix.to(torch.float)  # Payoffs for joint actions (in matrix form, from row player's perspective) (force to float)
         self.prob_C = None
         self.s = [Dirichlet(alpha).mean for alpha in self.alpha]  # Categorical state prior (D?)
         self.E = torch.ones(num_actions) / num_actions  # Habits 
-        # self.q_s_u = [None] * num_agents
-        # self.psi_pred = [None] * num_agents
 
-        # self.A_params = torch.eye(2)
-        # self.B_params = torch.tensor([torch.eye(2), torch.eye(2)])
-        # Opponent modeling (what I think their preferences are, currently unused - no learning)
         # Store blanket states history for learning
         self.s_history = []
         self.o_history = []
         self.u_history = []
-        # self.C_opp_params = self.log_C.T.clone().detach()    ### <--------------- TEST transpose log_C as if ego knew exactly alters preferences
-        self.psi_params = torch.ones_like(self.log_C)    ### <--------------- TEST uniform prior for opponent preferences
         
         # Values for t = 0, plus resetting each timestep
         self.action = torch.multinomial(self.E, 1).item()  # Starting action randomly sampled according to habits
@@ -81,7 +72,6 @@ class Agent:
         self.novelty = torch.zeros(num_actions)
 
         self.expected_EFE = [None]  # Expected EFE averaged over my expected 
-
 
     # ========================================
     # Summaries
@@ -105,7 +95,6 @@ class Agent:
 
         # Format the game matrix and opponent model parameters
         formatted_game_matrix = format_tensor(self.log_C)
-        formatted_opponent_params = format_tensor(self.psi_params)
 
         # Format the state priors as percentages, with labels for each state factor
         formatted_state_priors = [
@@ -144,7 +133,6 @@ class Agent:
                 f"Log C (Payoffs):\n{formatted_game_matrix}\n"
                 f"{', '.join(formatted_state_priors)}\n"  # Join the state estimates on a single line
                 f"Habits E: {', '.join([f'{prob * 100:.2f}%' for prob in self.E])}\n"
-                f"Log C Opp Params (ToM Payoffs):\n{formatted_opponent_params}\n"
 
                 f"Total Variational Free Energy (VFE): {total_vfe:.2f}, Per Factor: {', '.join(formatted_VFE)}\n"
                 f"Accuracy: {total_accuracy:.2f}\n"
@@ -212,10 +200,10 @@ class Agent:
     # Action 
     # =======================================
     def compute_efe(self):
-        n_actions = self.E.shape[0]  # Scalar (number of actions)
-        n_agents = self.psi_params.dim()  # Number of agents (including self)
+        n_agents = self.A.shape[0]   # Number of agents (including self)
+        n_actions = self.A.shape[-1]  # Number of actions
         self.q_s_u = torch.empty((n_actions, n_agents, n_actions))  # q(s|u_i) posterior predictive state distribution (for each factor) conditional on action u_i
-        self.q_o_u = torch.empty((n_actions, n_agents, n_actions))  # q(o|u_i) posterior predictive observation distribution (for each factor) conditional on action u_i
+        # self.q_o_u = torch.empty((n_actions, n_agents, n_actions))  # q(o|u_i) posterior predictive observation distribution (for each factor) conditional on action u_i
         # (TODO: maybe self.q_o_u should be (n_agents, n_actions, n_actions) - not too important though) 
         
         EFE = torch.zeros(n_actions)  # n-action length vector of zeros
@@ -226,27 +214,86 @@ class Agent:
         
         novelty = torch.zeros((n_actions,))
 
+        # -----------------------------------------------------------
+        # Compute joint observation likelihood
+
+        # Generate all possible combinations of o and s
+        o_combinations = torch.cartesian_prod(*[torch.arange(n_actions)] * n_agents)
+        s_combinations = torch.cartesian_prod(*[torch.arange(n_actions)] * n_agents)
+
+        # Now we need to gather the probabilities for all combinations
+
+        # Initialize an empty tensor to store the joint probabilities
+        p_o_s_joint = torch.ones(len(s_combinations), len(o_combinations))
+
+        # Calculate the joint probabilities
+        for idx_s, s in enumerate(s_combinations):
+            for idx_o, o in enumerate(o_combinations):
+                prob = 1.0
+                for i in range(n_agents):
+                    prob *= self.A[i, s[i], o[i]]
+                p_o_s_joint[idx_s, idx_o] = prob
+
+        p_o_s_joint = p_o_s_joint / p_o_s_joint.sum()  # Normalize the joint probabilities
+
+        # Reshape the joint_probs to separate o_i, o_j, o_k
+        p_o_s_joint = p_o_s_joint.view(n_actions ** n_agents, *(n_actions,) * n_agents)
+
+        # -----------------------------------------------------------
+
+        # p(u_{-i} | u_i)
+        # For each of my actions, what are the probabilities of the other agents action combos? e.g. p(CC | me = C), p(CD | me = C), p(DC | me = C), etc.
+        # conditional_joint_prior = self.psi_params / self.psi_params.sum(dim=list(range(1, n_agents)), keepdim=True)  # p(u_{-i} | u_i)
+        # assert conditional_joint_prior.ndimension() == n_agents, "Expected joint actions (F0) is not an n-agent dimensional tensor"
+        # assert torch.prod(torch.tensor(conditional_joint_prior.shape[:-1])) == n_actions ** (n_agents-1), "# Expected joint action (F0) vectors != num_actions^(n_agents - 1)"
+        # assert torch.allclose(conditional_joint_prior.sum(), torch.tensor(float(n_actions))), "Expected joint action probs (F0) do not sum to num actions."
+        # assert torch.allclose(conditional_joint_prior[u_i].sum(), torch.tensor(1.0)), "Expected probs[action] (F0) tensor does not sum to 1."
+        
         # For each action
         for u_i in range(n_actions):
+
+            # -----------------------------------------------------------
+            # Compute joint state posterior
+            
+            q_s = torch.stack([
+                self.B[factor_idx, u_i] @ self.s[factor_idx]  # Predicted state q(s | s, u)
+                for factor_idx in range(n_agents)
+            ])
+            
+            # Initialize joint probability tensor with ones
+            q_s_joint = q_s[0].view(-1, *[1] * (n_agents - 1))  # Reshape the first q(s_i) tensor
+
+            # Multiply iteratively for each agent
+            for i in range(1, n_agents):
+                shape = [1] * n_agents
+                shape[i] = -1  # Set the current dimension to -1 for reshaping
+                q_s_joint = q_s_joint * q_s[i].view(*shape)
+
+            # If you want to flatten it into a 1D tensor of joint probabilities:
+            q_joint_flat = q_s_joint.flatten()
+            
             # For each factor, the expected value is the value of the states (log C), multiplied by the action probabilities of the opponent
             for factor_idx in range(n_agents):
+
                 H = -torch.diag(self.A[factor_idx] @ torch.log(self.A[factor_idx] + 1e-9))  # Conditional (pseudo?) entropy (of the generated emissions matrix) - ZERO
                 assert H.ndimension() == 1, "log_C_modality (F0) is not a 1-dimensional tensor"
+
+                s_pred = q_s[factor_idx]  # Predicted state q(s | s, u)
                 
-                # p(u_{-i} | u_i)
-                # For each of my actions, what are the probabilities of the other agents action combos? e.g. p(CC | me = C), p(CD | me = C), p(DC | me = C), etc.
-                conditional_joint_prior = self.psi_params / self.psi_params.sum(dim=list(range(1, n_agents)), keepdim=True)  # p(u_{-i} | u_i)
-                assert conditional_joint_prior.ndimension() == n_agents, "Expected joint actions (F0) is not an n-agent dimensional tensor"
-                assert torch.prod(torch.tensor(conditional_joint_prior.shape[:-1])) == n_actions ** (n_agents-1), "# Expected joint action (F0) vectors != num_actions^(n_agents - 1)"
-                assert torch.allclose(conditional_joint_prior.sum(), torch.tensor(float(n_actions))), "Expected joint action probs (F0) do not sum to num actions."
-                assert torch.allclose(conditional_joint_prior[u_i].sum(), torch.tensor(1.0)), "Expected probs[action] (F0) tensor does not sum to 1."
+                p_o_s_joint_conditional = p_o_s_joint[:, u_i] # Extract the slice of the joint distribution where o_i = u_i
+                p_o_s_joint_conditional = (  # Normalize this slice to get the conditional probability p(o_j, o_k | s_i, s_j, s_k, o_i=u_i)
+                    p_o_s_joint_conditional 
+                    / p_o_s_joint_conditional.sum(dim=-1, keepdim=True)
+                )  
+
+                q_o_joint_conditional = torch.tensordot(
+                    p_o_s_joint_conditional, 
+                    q_joint_flat,
+                    dims=([0], [0])
+                )
                 
                 ### ==== MY PREFERENCES OVER MY ACTIONS === ### -  [What I wish to observe me doing, given what I expect they will do]
                 if factor_idx == 0:  
-                    # Hidden state prediction
-                    s_pred = self.B[factor_idx, u_i] @ self.s[factor_idx]  # Predicted state q(s | s, u)
-                    # TODO: This is placeholder for when B is an actual matrix
-                    # TODO: but maybe we could use q(u) (i.e. self.q_u) here
 
                     # Indices for tensor dot product
                     indices_left = list(range(1, n_agents))     # [1, ..., n-1] 
@@ -255,7 +302,7 @@ class Agent:
                     #Multiply joint payoffs by probability of joint action
                     log_C_modality = torch.tensordot(
                         self.log_C,  # (2, 2, 2)
-                        conditional_joint_prior[u_i],  # (2, 2)
+                        q_o_joint_conditional,  # (2, 2)
                         dims=(indices_left, indices_right)
                     )
                     
@@ -268,7 +315,6 @@ class Agent:
                         Special case for 2 agents: if we were to marginalise there would be no distribution left, so we index straight from the tensors
                         '''
                         log_C_modality = self.log_C[u_i]
-                        s_pred = conditional_joint_prior[u_i].squeeze()
                     elif n_agents > 2:
                         '''
                         General case for n agents: marginalise out the current factor agent to get expected probs for all other agents (not i, not j)
@@ -276,7 +322,7 @@ class Agent:
                                 p(u_{-j-i}|u_i) = p(u_k | u_i) = sum_{u_j} p(u_j, u_k | u_i) = sum_{u_j} p(u_{-i} | u_i)
                         '''
                         # Marginalise out the current factor agent to get expected probs for all other agents (not i, not j)
-                        conditional_joint_prior_marginal = conditional_joint_prior[u_i].sum(dim=factor_idx-1, keepdim=True)  # p(u_{-j-i}|u_i) = sum_{u_j} p(u_{-i} | u_i)
+                        q_o_joint_conditional_marginal = q_o_joint_conditional.sum(dim=factor_idx-1, keepdim=True)
                     
                         # Indices for tensor dot product
                         indices_left = list(range(n_agents-1))      # [0, ..., n-2]
@@ -285,25 +331,25 @@ class Agent:
 
                         log_C_modality = torch.tensordot(
                             self.log_C[u_i], # (2, 2)
-                            conditional_joint_prior_marginal.squeeze(),   # (2,)
+                            q_o_joint_conditional_marginal.squeeze(),   # (2,)
                             dims=(indices_left, indices_right)
                         )
 
                         # Compute the posterior predictive state for the current factor agent
-                        indices = list(range(n_agents-1))   # [0, ..., n-1]  because we've removed i (ego; conditional)
-                        indices.remove(factor_idx-1)        # Remove the current factor index  [0, ..., n-1] \ (j-1)  --> (j-1) because we've removed i (ego; conditional)
-                        s_pred = conditional_joint_prior[u_i].sum(dim=indices)  # p(u_j | u_i) = sum_{u_{-i-j}} p(u_j, u_{-i-j} | u_i)
+                        # indices = list(range(n_agents-1))   # [0, ..., n-1]  because we've removed i (ego; conditional)
+                        # indices.remove(factor_idx-1)        # Remove the current factor index  [0, ..., n-1] \ (j-1)  --> (j-1) because we've removed i (ego; conditional)
+                        # s_pred = conditional_joint_prior[u_i].sum(dim=indices)  # p(u_j | u_i) = sum_{u_{-i-j}} p(u_j, u_{-i-j} | u_i)
                         
                 self.q_s_u[u_i, factor_idx] = s_pred
                 assert torch.allclose(s_pred.sum(), torch.tensor(1.0)), f"s_pred (factor {factor_idx}) tensor does not sum to 1."
                 assert log_C_modality.ndimension() == 1, f"log_C_modality (factor {factor_idx}) is not a 1-dimensional tensor."
-                # assert torch.allclose(torch.exp(log_C_modality).sum(), torch.FloatTensor(n_agents)), "C does not sum to n agents."  # TODO: Legit check for C that each modality is a prob dist? 
+                # assert torch.allclose(torch.exp(log_C_modality).sum(), torch.FloatTensor(n_agents)), "C does not sum to n agents."  # TODO: Legit check for C that each modality is a prob dist? )
             
                 # Posterior predictive observation(s) for both factors
                 o_pred = self.A[factor_idx] @ s_pred
                 assert torch.allclose(o_pred.sum(), torch.tensor(1.0)), f"o_pred (factor {factor_idx}) tensor does not sum to 1."
                 assert o_pred.shape == (n_actions, ), f"o_pred (factor {factor_idx}) tensor is not the correct shape."
-                self.q_o_u[u_i, factor_idx] = o_pred
+                # self.q_o_u[u_i, factor_idx] = o_pred
                 
                 # EFE = Expected ambiguity + risk 
                 EFE[u_i] += H @ s_pred + (o_pred @ (torch.log(o_pred + 1e-9) - log_C_modality))
@@ -315,11 +361,13 @@ class Agent:
 
             assert torch.allclose(risk[u_i] + ambiguity[u_i], EFE[u_i], atol=1e-4), f"[u_i = {u_i}] risk + ambiguity ({risk[u_i]} + {ambiguity[u_i]}={risk[u_i] + ambiguity[u_i]}) does not equal EFE (={EFE[u_i]})"
             assert torch.allclose(-salience[u_i] - pragmatic_value[u_i], EFE[u_i], atol=1e-4), f"[u_i = {u_i}] -salience - pragmatic value (-{salience[u_i]} - {pragmatic_value[u_i]}={-salience[u_i] - pragmatic_value[u_i]}) does not equal EFE (={EFE[u_i]})"
+            assert not torch.isnan(EFE[u_i]), f"EFE[{u_i}] is NaN"
         
             # Novelty ----------------------------------------------------------
             # novelty[u_i] = self.compute_A_novelty(u_i)
 
         EFE = EFE - novelty
+        assert not torch.isnan(EFE[u_i]), f"EFE[{u_i}] is NaN"
 
         # Data collection ------------------------------------------------------
         self.EFE = EFE
@@ -496,32 +544,16 @@ class Agent:
 
     def update_precision(self, EFE, q_u):
         # Compute the expected EFE as a scalar value
-        self.expected_EFE = [torch.dot(q_u, EFE).item()]
+        self.expected_EFE = torch.dot(q_u, EFE).item()
         
         # Update gamma (the precision) based on the expected EFE
-        self.gamma = self.beta_1 / (self.beta_0 - self.expected_EFE[0])
+        self.gamma = self.beta_1 / (self.beta_0 - self.expected_EFE)
         
         return self.gamma
 
     # ========================================
     # Learning p(u_j | u_i)
     # =======================================
-
-    # Define the n-player generalized function
-    def bayesian_learning(self, o, eta=1):
-        
-        # Find the joint action index
-        joint_action_idx = [torch.argmax(o[agent]).item() for agent in range(self.psi_params.dim())]
-        joint_action_idx = tuple(joint_action_idx)
-        
-        # Update based on observed action
-        self.psi_params[joint_action_idx] += eta #/ self.C_opp_params.numel()
-
-        # Temporal discounting
-        self.psi_params *= self.decay
-        self.psi_params += 1e-9
-        
-        return self.psi_params
     
     def learn(self):
 
@@ -530,9 +562,8 @@ class Agent:
         self.o_history = torch.stack(self.o_history)  # Shape: (T, n_agents, n_actions)
         self.u_history = torch.tensor(self.u_history)  # Shape: (T, )
     
-        # self.learn_A()
-        # self.learn_B()
-        # self.learn_Psi()
+        self.learn_A()
+        self.learn_B()
 
         # Reset history
         self.s_history = []
@@ -553,23 +584,28 @@ class Agent:
         A_posterior_params = self.A_params + delta_params  # Shape: (n_agents, n_actions, n_actions)
 
         # Bayesian Model Reduction ---------------------------------------------
-        shrinkage = 0.8
-        A_reduced_params = torch.softmax((1/shrinkage)*self.A_params, dim=-2)
-        # A_reduced_params = shrinkage * self.A_params 
+        BMR = True
+        if BMR:
+            shrinkage = self.decay
+            # A_reduced_params = torch.softmax((1/shrinkage)*self.A_params, dim=-2)
+            # A_reduced_params = shrinkage * self.A_params 
+            A_reduced_params = self.A_params ** (1/1.1)
 
-        # Update model parameters if they reduce the free energy
-        for factor_idx in range(len(self.s)):
-            delta_F = delta_free_energy(
-                A_posterior_params[factor_idx].flatten(), 
-                self.A_params[factor_idx].flatten(), 
-                A_reduced_params[factor_idx].flatten()
-            )
-            if delta_F < 0:
-                # Reduced model is preferred -> replace full model with reduced model
-                self.A_params[factor_idx] = A_reduced_params[factor_idx]
-            else:
-                # Full model is preferred -> update posterior
-                self.A_params[factor_idx] = A_posterior_params[factor_idx]
+            # Update model parameters if they reduce the free energy
+            for factor_idx in range(len(self.s)):
+                delta_F = delta_free_energy(
+                    A_posterior_params[factor_idx].flatten(), 
+                    self.A_params[factor_idx].flatten(), 
+                    A_reduced_params[factor_idx].flatten()
+                )
+                if delta_F < 0:
+                    # Reduced model is preferred -> replace full model with reduced model
+                    self.A_params[factor_idx] = A_reduced_params[factor_idx]
+                else:
+                    # Full model is preferred -> update posterior
+                    self.A_params[factor_idx] = A_posterior_params[factor_idx]
+        else:
+            self.A_params = A_posterior_params
         
         self.A = self.A_params / self.A_params.sum(dim=1, keepdim=True)  # Shape: (n_agents, n_actions, n_actions)
 
@@ -594,39 +630,6 @@ class Agent:
             self.B_params[:, u_it] = self.B_params[:, u_it] + delta_params
 
         self.B = self.B_params / self.B_params.sum(dim=2, keepdim=True)
-
-    def learn_Psi(self, eta=1):
-
-        psi_posterior_params = self.psi_params.clone()
-
-        for o in self.o_history:
-        
-            # Find the joint action index
-            joint_action_idx = [torch.argmax(o[agent]).item() for agent in range(self.psi_params.dim())]
-            joint_action_idx = tuple(joint_action_idx)
-            
-            # Update based on observed action
-            psi_posterior_params[joint_action_idx] += eta #/ self.C_opp_params.numel()
-
-        # Bayesian Model Reduction ---------------------------------------------
-        # shrinkage = 0.8
-        # psi_reduced_params = torch.softmax(
-        #     (1/shrinkage) * self.psi_params.flatten(), 
-        #     dim=-1).reshape(self.psi_params.shape)
-        psi_reduced_params = self.psi_params ** (1/1.3) + 1e-9
-
-        # Update model parameters if they reduce the free energy
-        delta_F = delta_free_energy(
-            psi_posterior_params.flatten(), 
-            self.psi_params.flatten(), 
-            psi_reduced_params.flatten()
-        )
-        if delta_F < 0:
-            # Reduced model is preferred -> replace full model with reduced model
-            self.psi_params = psi_reduced_params
-        else:
-            # Full model is preferred -> update posterior
-            self.psi_params = psi_posterior_params
 
 
 def multivariate_beta(alpha):
