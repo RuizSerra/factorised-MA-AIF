@@ -583,7 +583,7 @@ class Agent:
         self.u_history = torch.tensor(self.u_history)  # Shape: (T, )
     
         self.learn_A()
-        self.learn_B()
+        # self.learn_B()
 
         # Reset history
         self.s_history = []
@@ -600,7 +600,7 @@ class Agent:
         outer_products = s_hist_expanded * o_hist_expanded  # Shape: (T, n_agents, n_actions, n_actions)
 
         # Posterior parameters
-        delta_params = outer_products.sum(dim=0)  # Shape: (n_agents, n_actions, n_actions)
+        delta_params = outer_products.mean(dim=0)  # Shape: (n_agents, n_actions, n_actions)
         A_posterior_params = self.A_params + delta_params  # Shape: (n_agents, n_actions, n_actions)
 
         # Bayesian Model Reduction ---------------------------------------------
@@ -610,14 +610,14 @@ class Agent:
             # assert 0 < shrinkage < 1, "Shrinkage parameter must be in [0, 1]"
             # A_reduced_params = shrinkage * self.A_params 
             # assert shrinkage >= 1, "Shrinkage parameter must be greater than 1"
-            # A_reduced_params = torch.softmax(shrinkage * self.A_params, dim=-2)
+            A_reduced_params = torch.softmax(shrinkage * self.A_params, dim=-2)
             # A_reduced_params = self.A_params ** (1/shrinkage)
 
-            A_identity = torch.stack([
-                torch.tensor([[1., 0.], [0., 1.]])
-                for _ in range(self.A.shape[0])
-            ]).view(*self.A.shape)
-            A_reduced_params = torch.softmax(shrinkage * A_identity, dim=-2) * self.A_params
+            # A_identity = torch.stack([
+            #     torch.tensor([[1., 0.], [0., 1.]])
+            #     for _ in range(self.A.shape[0])
+            # ]).view(*self.A.shape)
+            # A_reduced_params = torch.softmax(shrinkage * A_identity, dim=-2) * self.A_params
 
             # Update model parameters if they reduce the free energy
             self.delta_F = []
@@ -655,13 +655,40 @@ class Agent:
 
         # Perform the row-wise outer product
         outer_products = s_prev_expanded * s_next_expanded  # Shape: (T, n_agents, n_actions, n_actions)
+        T = outer_products.shape[0]
 
         # Update parameters for every transition (s, u, s') in the history
+        B_posterior_params = self.B_params.clone()
         for t in range(outer_products.shape[0]):
             # Likelihood parameters update
-            delta_params = outer_products[t]  # Shape: (n_agents, n_actions, n_actions)
+            delta_params = outer_products[t] / T  # Shape: (n_agents, n_actions, n_actions)
             u_it = self.u_history[t].item()   # Action u_i at time t
-            self.B_params[:, u_it] = self.B_params[:, u_it] + delta_params
+            B_posterior_params[:, u_it] = self.B_params[:, u_it] + delta_params
+
+        # Bayesian Model Reduction ---------------------------------------------
+        BMR = True
+        if BMR:
+            shrinkage = self.decay
+            # assert shrinkage >= 1, "Shrinkage parameter must be greater than 1"
+            B_reduced_params = torch.softmax(shrinkage * self.B_params, dim=-2)
+
+            # Update model parameters if they reduce the free energy
+            self.delta_F = []
+            for factor_idx in range(len(self.s)):
+                delta_F = delta_free_energy(
+                    B_posterior_params[factor_idx].flatten(), 
+                    self.B_params[factor_idx].flatten(), 
+                    B_reduced_params[factor_idx].flatten()
+                )
+                self.delta_F.append(delta_F)  # Data collection
+                if delta_F < 0:
+                    # Reduced model is preferred -> replace full model with reduced model
+                    self.B_params[factor_idx] = B_reduced_params[factor_idx]
+                else:
+                    # Full model is preferred -> update posterior
+                    self.B_params[factor_idx] = B_posterior_params[factor_idx]
+        else:
+            self.B_params = B_posterior_params
 
         self.B = self.B_params / self.B_params.sum(dim=2, keepdim=True)
 
