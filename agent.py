@@ -168,7 +168,7 @@ class Agent:
             s_prev = self.s[factor_idx].clone().detach()  # State t-1
             assert torch.allclose(s_prev.sum(), torch.tensor(1.0)), "s_prev tensor does not sum to 1."
             log_prior = torch.log(self.B[factor_idx, self.action] @ s_prev + 1e-9)  # New prior is old posterior
-            log_likelihood = torch.log(self.A[factor_idx] @ o[factor_idx] + 1e-9)  # Probability of observation given hidden states
+            log_likelihood = torch.log(self.A[factor_idx].T @ o[factor_idx] + 1e-9)  # Probability of observation given hidden states
 
             variational_params = self.alpha[factor_idx].clone().detach().requires_grad_(True)  # Variational Dirichlet distribution for each factor (agent)
             optimizer = torch.optim.Adam([variational_params], lr=learning_rate)
@@ -530,7 +530,7 @@ class Agent:
         self.o_history = torch.stack(self.o_history)  # Shape: (T, n_agents, n_actions)
         self.u_history = torch.tensor(self.u_history)  # Shape: (T, )
     
-        # self.learn_A()
+        self.learn_A()
         # self.learn_B()
         # self.learn_Psi()
 
@@ -549,27 +549,50 @@ class Agent:
         outer_products = s_hist_expanded * o_hist_expanded  # Shape: (T, n_agents, n_actions, n_actions)
 
         # Posterior parameters
-        delta_params = outer_products.sum(dim=0)  # Shape: (n_agents, n_actions, n_actions)
+        delta_params = outer_products.mean(dim=0)  # Shape: (n_agents, n_actions, n_actions)
         A_posterior_params = self.A_params + delta_params  # Shape: (n_agents, n_actions, n_actions)
 
         # Bayesian Model Reduction ---------------------------------------------
-        shrinkage = 0.8
-        A_reduced_params = torch.softmax((1/shrinkage)*self.A_params, dim=-2)
-        # A_reduced_params = shrinkage * self.A_params 
+        BMR = True
+        if BMR:
+            shrinkage = 1.1
+            mixture = 0.8
+            # assert 0 < shrinkage < 1, "Shrinkage parameter must be in [0, 1]"
+            # A_reduced_params = shrinkage * self.A_params 
+            # assert shrinkage >= 1, "Shrinkage parameter must be greater than 1"
+            # A_reduced_params = torch.softmax(shrinkage * self.A_params, dim=-2)
+            # A_reduced_params = self.A_params ** (1/shrinkage)
 
-        # Update model parameters if they reduce the free energy
-        for factor_idx in range(len(self.s)):
-            delta_F = delta_free_energy(
-                A_posterior_params[factor_idx].flatten(), 
-                self.A_params[factor_idx].flatten(), 
-                A_reduced_params[factor_idx].flatten()
+            A_identity = torch.stack([
+                torch.tensor([[1., 0.], [0., 1.]])
+                for _ in range(self.A.shape[0])
+            ]).view(*self.A.shape)
+            A_reduced_params = (
+                mixture * self.A_params 
+                + (1 - mixture) * torch.softmax(shrinkage * A_identity, dim=-2)
             )
-            if delta_F < 0:
-                # Reduced model is preferred -> replace full model with reduced model
-                self.A_params[factor_idx] = A_reduced_params[factor_idx]
-            else:
-                # Full model is preferred -> update posterior
-                self.A_params[factor_idx] = A_posterior_params[factor_idx]
+
+            # Update model parameters if they reduce the free energy
+            self.delta_F = []
+            for factor_idx in range(len(self.s)):
+                delta_F = delta_free_energy(
+                    A_posterior_params[factor_idx].flatten(), 
+                    self.A_params[factor_idx].flatten(), 
+                    A_reduced_params[factor_idx].flatten()
+                )
+                self.delta_F.append(delta_F)  # Data collection
+                if delta_F < 0:
+                    # Reduced model is preferred -> replace full model with reduced model
+                    self.A_params[factor_idx] = A_reduced_params[factor_idx]
+                    # print(f"Factor {factor_idx}: Reduced model is preferred.")
+                    # print(f"Delta F: {delta_F}")
+                    # print(f"Reduced: {A_reduced_params[factor_idx]}")
+                    # print(f"Posterior: {A_posterior_params[factor_idx]}")
+                else:
+                    # Full model is preferred -> update posterior
+                    self.A_params[factor_idx] = A_posterior_params[factor_idx]
+        else:
+            self.A_params = A_posterior_params
         
         self.A = self.A_params / self.A_params.sum(dim=1, keepdim=True)  # Shape: (n_agents, n_actions, n_actions)
 
