@@ -154,7 +154,7 @@ class Agent:
             s_prev = self.s[factor_idx].clone().detach()  # State t-1
             assert torch.allclose(s_prev.sum(), torch.tensor(1.0)), "s_prev tensor does not sum to 1."
             log_prior = torch.log(self.B(s_prev, self.action) + 1e-9)  # New prior is old posterior
-            log_likelihood = torch.log(self.A[factor_idx] @ o[factor_idx] + 1e-9)  # Probability of observation given hidden states
+            log_likelihood = torch.log(self.A[factor_idx].T @ o[factor_idx] + 1e-9)  # Probability of observation given hidden states
 
             variational_params = self.alpha[factor_idx].clone().detach().requires_grad_(True)  # Variational Dirichlet distribution for each factor (agent)
             optimizer = torch.optim.Adam([variational_params], lr=learning_rate)
