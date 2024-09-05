@@ -49,7 +49,7 @@ class Agent:
         self.B = self.B_params / self.B_params.sum(dim=2, keepdim=True)
         self.log_C = game_matrix.to(torch.float)  # Payoffs for joint actions (in matrix form, from row player's perspective) (force to float)
         self.prob_C = None
-        self.s = [Dirichlet(alpha).mean for alpha in self.alpha]  # Categorical state prior (D?)
+        self.s = torch.stack([Dirichlet(alpha).mean for alpha in self.alpha])  # Categorical state prior (D)
         self.E = torch.ones(num_actions) / num_actions  # Habits 
 
         # Store blanket states history for learning
@@ -152,6 +152,25 @@ class Agent:
     # Perception 
     # =======================================
     def infer_state(self, o, learning_rate=1e-2, num_iterations=100, num_samples=100):
+        '''
+        Infer the hidden state of each agent (factor_idx) (i.e. the probability 
+        distribution over actions of each agent) given the observation `o` 
+        (i.e. the action taken by each agent).
+
+        Employs self.A (observation model) and self.B (transition model),
+        and updates the variational parameters self.alpha for each agent
+        through a Monte Carlo approximation of the variational free energy.
+
+        Args:
+            o (torch.Tensor): Observation tensor of shape (n_agents, n_actions), 
+                i.e. one-hot encoding of actions for each agent
+            learning_rate (float): Learning rate for the optimizer
+            num_iterations (int): Number of iterations to run the optimizer
+            num_samples (int): Number of MC samples to draw from the variational distribution
+        
+        Returns:
+            s (torch.Tensor): Hidden state tensor of shape (n_agents, n_actions)
+        '''
         for factor_idx in range(len(self.s)):  # Loop over each state factor (me + the other agents)
             s_prev = self.s[factor_idx].clone().detach()  # State t-1
             assert torch.allclose(s_prev.sum(), torch.tensor(1.0)), "s_prev tensor does not sum to 1."
@@ -169,29 +188,29 @@ class Agent:
                 vfe_samples = torch.sum(s_samples * (log_s - log_likelihood - log_prior), dim=-1) 
                 VFE = vfe_samples.mean()
 
-                entropy = -torch.sum(s_samples.detach() * log_s.detach(), dim=-1).mean()
-                energy = -torch.sum(s_samples.detach() * (log_prior.detach() + log_likelihood.detach()), dim=-1).mean()
-                accuracy = torch.sum(s_samples.detach() * log_likelihood.detach(), dim=-1).mean()
-                complexity = -torch.sum(s_samples.detach() * (log_prior.detach() - log_s.detach()), dim=-1).mean()
-
-                assert torch.allclose(energy - entropy, VFE, atol=1e-6), "Assertion failed: energy + entropy does not equal VFE"
-                assert torch.allclose(complexity - accuracy, VFE, atol=1e-6), "Assertion failed: complexity - accuracy does not equal VFE"
-
                 VFE.backward()
                 optimizer.step()
                 variational_params.data.clamp_(min=1e-3)
 
-            self.alpha[factor_idx] = variational_params.detach()
-            self.s[factor_idx] = Dirichlet(variational_params).mean.detach()
+            # Results of variational inference: variational posterior, variational parameters, VFE
+            self.s[factor_idx] = Dirichlet(variational_params).mean.detach()  # Variational posterior
+            self.alpha[factor_idx] = variational_params.detach()  # Store variational parameters (for next timestep)
             self.VFE[factor_idx] = VFE.detach()
             
-
+            # Compute additional metrics (for validation and plotting)
+            entropy = -torch.sum(s_samples * log_s, dim=-1).mean().detach()
+            energy = -torch.sum(s_samples * (log_prior + log_likelihood), dim=-1).mean().detach()
+            accuracy = torch.sum(s_samples * log_likelihood, dim=-1).mean().detach()
+            complexity = -torch.sum(s_samples * (log_prior - log_s), dim=-1).mean().detach()
+            assert torch.allclose(energy - entropy, VFE, atol=1e-6), "Assertion failed: energy + entropy does not equal VFE"
+            assert torch.allclose(complexity - accuracy, VFE, atol=1e-6), "Assertion failed: complexity - accuracy does not equal VFE"
             self.entropy[factor_idx] = entropy
             self.energy[factor_idx] = energy
             self.accuracy[factor_idx] = accuracy
             self.complexity[factor_idx] = complexity
 
-        self.s_history.append(torch.stack(self.s))
+        # Data collection (for learning and plotting)
+        self.s_history.append(self.s)
         self.o_history.append(o)
         
         return self.s
@@ -200,6 +219,12 @@ class Agent:
     # Action 
     # =======================================
     def compute_efe(self):
+        '''
+        Compute the Expected Free Energy (EFE) for each possible action
+        
+        Returns:
+            EFE (torch.Tensor): Expected Free Energy for each possible action
+        '''
         n_agents = self.A.shape[0]   # Number of agents (including self)
         n_actions = self.A.shape[-1]  # Number of actions
         self.q_s_u = torch.empty((n_actions, n_agents, n_actions))  # q(s|u_i) posterior predictive state distribution (for each factor) conditional on action u_i
@@ -607,17 +632,22 @@ class Agent:
         BMR = True
         if BMR:
             shrinkage = self.decay
+            mixture = 0.8
             # assert 0 < shrinkage < 1, "Shrinkage parameter must be in [0, 1]"
             # A_reduced_params = shrinkage * self.A_params 
             # assert shrinkage >= 1, "Shrinkage parameter must be greater than 1"
-            A_reduced_params = torch.softmax(shrinkage * self.A_params, dim=-2)
+            # A_reduced_params = torch.softmax(shrinkage * self.A_params, dim=-2)
             # A_reduced_params = self.A_params ** (1/shrinkage)
 
-            # A_identity = torch.stack([
-            #     torch.tensor([[1., 0.], [0., 1.]])
-            #     for _ in range(self.A.shape[0])
-            # ]).view(*self.A.shape)
-            # A_reduced_params = torch.softmax(shrinkage * A_identity, dim=-2) * self.A_params
+            A_identity = torch.stack([
+                torch.tensor([[1., 0.], [0., 1.]])
+                for _ in range(self.A.shape[0])
+            ]).view(*self.A.shape)
+            
+            A_reduced_params = (
+                mixture * self.A_params 
+                + (1 - mixture) * A_identity  # torch.softmax(shrinkage * A_identity, dim=-2)
+            )
 
             # Update model parameters if they reduce the free energy
             self.delta_F = []
