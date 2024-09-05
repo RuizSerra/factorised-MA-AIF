@@ -749,7 +749,7 @@ class Agent:
         BMR = True
         if BMR:
             # self.A_joint = torch.log(A_joint_posterior + 1)
-            self.A_joint = 0.6 * A_joint_posterior
+            self.A_joint = self.decay * A_joint_posterior
 
             # mixture = 0.8
             # A_joint_reduced = (
