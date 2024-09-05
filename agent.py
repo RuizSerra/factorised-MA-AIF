@@ -36,8 +36,8 @@ class Agent:
 
         # Generative model/variational posterior parameters
         self.alpha = [torch.ones(num_actions) for _ in range(num_agents)]  # Dirichlet state prior
-        self.A_params = torch.ones((num_agents, num_actions, num_actions))
-        # self.A_params = torch.stack([torch.eye(num_actions) for _ in range(num_agents)]) + 1e-9  # Identity observation model
+        self.A_params = torch.ones((num_agents, num_actions, num_actions))  # Flat observation model prior
+        # self.A_params = torch.stack([torch.eye(num_actions) for _ in range(num_agents)]) + 1e-9  # Identity observation model prior
         self.A = self.A_params / self.A_params.sum(dim=1, keepdim=True)
         self.A_joint = torch.ones((num_actions,) * 2 * num_agents)  # Joint observation model
         # self.B_params = torch.ones((num_agents, num_actions, num_actions, num_actions))
@@ -70,6 +70,7 @@ class Agent:
         self.salience = torch.zeros(num_actions) #for each possible action
         self.pragmatic_value = torch.zeros(num_actions)
         self.novelty = torch.zeros(num_actions)
+        self.log_C_modality = torch.zeros(num_agents, num_actions) # Log C for each agent (state factor)
 
         self.expected_EFE = [None]  # Expected EFE averaged over my expected 
 
@@ -277,18 +278,18 @@ class Agent:
 
                 H = -torch.diag(self.A[factor_idx] @ torch.log(self.A[factor_idx] + 1e-9))  # Conditional (pseudo?) entropy (of the generated emissions matrix)
                 assert H.ndimension() == 1, "log_C_modality (F0) is not a 1-dimensional tensor"
+
+                # Posterior predictive state for factor is E_{q(s)}[p(s'|s, u_i)]
+                s_pred = q_s_u[factor_idx]  # shape (2, )
                 
                 ### ==== MY PREFERENCES OVER MY ACTIONS === ### -  [What I wish to observe me doing, given what I expect they will do]
                 if factor_idx == 0:
-
-                    # Posterior predictive state for ego is E_{q(s)}[p(s'|s, u_i)]
-                    s_pred = q_s_u[factor_idx]  # shape (2, )
                     
-                    # Posterior predictive observation for ego is the 
-                    # one-hot encoding of the action currently under consideration
-                    q_o_u = torch.tensor(
-                        [1.0 if _ == u_i else 0.0 for _ in range(n_actions)]
-                    )  # shape (2, )
+                    # Posterior predictive observation is
+                    # the marginal distribution of the joint observation (marginalising all others)
+                    dimensions = torch.arange(n_agents)
+                    dimensions = torch.cat((dimensions[:factor_idx], dimensions[factor_idx+1:]))  # marginalise out all others (except current factor)
+                    q_o_u = torch.sum(q_o_joint_u, dim=tuple(dimensions))  # shape (2, )
 
                     # Posterior predictive observation (joint for alters)
                     q_o_others_u = torch.sum(q_o_joint_u, dim=factor_idx)  # shape (2, 2)
@@ -297,7 +298,8 @@ class Agent:
                     # under the joint (marginal) posterior predictive observation
                     #   in math: log C^i = E_{q(o_{-i}|u_i)}[log C]
                     #   in code: log_C_modality = E_{q_o_others_u}[self.log_C]
-                    indices_left = list(range(1, n_agents))     # [1, ..., n-1] 
+                    indices_left = list(range(n_agents))     # [1, ..., n-1] 
+                    indices_left.remove(factor_idx)  # remove current factor
                     indices_right = list(range(n_agents - 1))   # [0, ..., n-2]
                     log_C_modality = torch.tensordot(
                         self.log_C,     # (2, 2, 2)
@@ -307,14 +309,13 @@ class Agent:
                     
                 ### ==== MY PREFERENCES OVER THEIR ACTIONS === [what I wish to observe j doing, given what I plan on doing, and what I expect k will do]
                 else:  
-                    # Predictive posterior state for alters is E_{q(s)}[p(s'|s, u_i)]
-                    s_pred = q_s_u[factor_idx]  # shape (2, )
 
                     # Compute this factor's preferences and posterior predictive state
                     if n_agents == 2:
                         '''
                         Special case for 2 agents: if we were to marginalise there would be no distribution left, so we index straight from the tensors
                         '''
+                        raise NotImplementedError("Special case for 2 agents not implemented yet.")
                         log_C_modality = self.log_C[u_i]
                         # q_o_u = TODO
                     elif n_agents > 2:
@@ -326,7 +327,6 @@ class Agent:
                         
                         # Posterior predictive observation for alters is
                         # the marginal distribution of the joint observation (marginalising all others)
-                        # FIXME: or should the ego variable take the value u_i here?
                         dimensions = torch.arange(n_agents)
                         dimensions = torch.cat((dimensions[:factor_idx], dimensions[factor_idx+1:]))  # marginalise out all others (except current factor)
                         q_o_u = torch.sum(q_o_joint_u, dim=tuple(dimensions))  # shape (2, )
@@ -337,9 +337,10 @@ class Agent:
 
                         # This factor's preferences are the expected value of the joint payoffs
                         # under the joint (marginal) posterior predictive observation
-                        #   in math: log C^i = E_{q(o_{-i}|u_i)}[log C]
+                        #   in math: log C^j = E_{q(o_{-j}|u_i)}[log C]
                         #   in code: log_C_modality = E_{q_o_others_u}[self.log_C]
-                        indices_left = list(range(1, n_agents))     # [1, ..., n-1] 
+                        indices_left = list(range(n_agents))     # [1, ..., n-1] 
+                        indices_left.remove(factor_idx)  # remove current factor
                         indices_right = list(range(n_agents - 1))   # [0, ..., n-2]
                         log_C_modality = torch.tensordot(
                             self.log_C,     # (2, 2, 2)
@@ -351,7 +352,7 @@ class Agent:
                 
                 self.q_s_u[u_i, factor_idx] = s_pred
                 assert torch.allclose(s_pred.sum(), torch.tensor(1.0)), f"s_pred (factor {factor_idx}) tensor does not sum to 1."
-                assert log_C_modality.ndimension() == 1, f"log_C_modality (factor {factor_idx}) is not a 1-dimensional tensor."
+                assert log_C_modality.ndimension() == 1, f"log_C_modality (factor {factor_idx}) is not a 1-dimensional tensor ({log_C_modality.ndimension()} dimensions)."
                 # assert torch.allclose(torch.exp(log_C_modality).sum(), torch.FloatTensor(n_agents)), "C does not sum to n agents."  # TODO: Legit check for C that each modality is a prob dist? )
             
                 # Posterior predictive observation(s) for both factors
@@ -368,6 +369,7 @@ class Agent:
                 risk[u_i] += (o_pred @ (torch.log(o_pred + 1e-9)))  - (o_pred @ log_C_modality) # Risk is negative posterior predictive entropy minus pragmatic value
                 salience[u_i] += -(o_pred @ (torch.log(o_pred + 1e-9)))  - (H @ s_pred) # Salience is negative posterior predictive entropy minus ambiguity (0)
                 pragmatic_value[u_i] += (o_pred @ log_C_modality) # Pragmatic value is negative cross-entropy
+                self.log_C_modality[factor_idx] = log_C_modality
 
             assert torch.allclose(risk[u_i] + ambiguity[u_i], EFE[u_i], atol=1e-4), f"[u_i = {u_i}] risk + ambiguity ({risk[u_i]} + {ambiguity[u_i]}={risk[u_i] + ambiguity[u_i]}) does not equal EFE (={EFE[u_i]})"
             assert torch.allclose(-salience[u_i] - pragmatic_value[u_i], EFE[u_i], atol=1e-4), f"[u_i = {u_i}] -salience - pragmatic value (-{salience[u_i]} - {pragmatic_value[u_i]}={-salience[u_i] - pragmatic_value[u_i]}) does not equal EFE (={EFE[u_i]})"
@@ -733,39 +735,35 @@ class Agent:
             
             A_joint_posterior[o_indices] += q_s_joint
 
-        # Bayesian Model Reduction ---------------------------------------------
-        BMR = False
+       # Bayesian Model Reduction ---------------------------------------------
+        BMR = True
         if BMR:
-            mixture = 0.8
-            # A_identity = torch.stack([
-            #     torch.tensor([[1., 0.], [0., 1.]])
-            #     for _ in range(self.A.shape[0])
-            # ]).view(*self.A.shape)
-            
-            # A_reduced_params = (
-            #     mixture * self.A_params 
-            #     + (1 - mixture) * A_identity  # torch.softmax(shrinkage * A_identity, dim=-2)
-            # )
+            # self.A_joint = torch.log(A_joint_posterior + 1)
+            self.A_joint = 0.6 * A_joint_posterior
 
+            # mixture = 0.8
+            # A_joint_reduced = (
+            #     mixture * self.A_joint 
+            #     + (1 - mixture) * torch.log(self.A_joint + 1e-9)
+            # )
+    
             # # Update model parameters if they reduce the free energy
-            # self.delta_F = []
-            # for factor_idx in range(len(self.s)):
-            #     delta_F = delta_free_energy(
-            #         A_posterior_params[factor_idx].flatten(), 
-            #         self.A_params[factor_idx].flatten(), 
-            #         A_reduced_params[factor_idx].flatten()
-            #     )
-            #     self.delta_F.append(delta_F)  # Data collection
-            #     if delta_F < 0:
-            #         # Reduced model is preferred -> replace full model with reduced model
-            #         self.A_params[factor_idx] = A_reduced_params[factor_idx]
-            #         # print(f"Factor {factor_idx}: Reduced model is preferred.")
-            #         # print(f"Delta F: {delta_F}")
-            #         # print(f"Reduced: {A_reduced_params[factor_idx]}")
-            #         # print(f"Posterior: {A_posterior_params[factor_idx]}")
-            #     else:
-            #         # Full model is preferred -> update posterior
-            #         self.A_params[factor_idx] = A_posterior_params[factor_idx]
+            # delta_F = delta_free_energy(
+            #     A_joint_posterior.flatten(), 
+            #     self.A_joint.flatten(), 
+            #     A_joint_reduced.flatten()
+            # )
+            # if delta_F < 0:
+            #     print('reduced')
+            #     # Reduced model is preferred -> replace full model with reduced model
+            #     self.A_joint = A_joint_reduced
+            #     # print(f"Factor {factor_idx}: Reduced model is preferred.")
+            #     # print(f"Delta F: {delta_F}")
+            #     # print(f"Reduced: {A_reduced_params[factor_idx]}")
+            #     # print(f"Posterior: {A_posterior_params[factor_idx]}")
+            # else:
+            #     # Full model is preferred -> update posterior
+            #     self.A_joint = A_joint_posterior
         else:
             self.A_joint = A_joint_posterior
 
