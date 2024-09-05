@@ -271,7 +271,7 @@ class Agent:
             q_o_joint_u = q_o_joint_u / q_o_joint_u.sum()  # Normalise to a probability distribution
 
             assert q_o_joint_u.shape == (n_actions, ) * (n_agents-1), f"q_o_joint_u shape {q_o_joint_u.shape} is not correct."
-            assert torch.allclose(q_o_joint_u.sum(), torch.tensor(1.0)), "q_o_joint_u tensor does not sum to 1."
+            assert torch.allclose(q_o_joint_u.sum(), torch.tensor(1.0)), f"q_o_joint_u tensor does not sum to 1 ({q_o_joint_u.sum()})."
             
             # For each factor, the expected value is the value of the states (log C), multiplied b y the action probabilities of the opponent
             for factor_idx in range(n_agents):
@@ -746,38 +746,34 @@ class Agent:
             A_joint_posterior[o_indices] += q_s_joint
 
         # Bayesian Model Reduction ---------------------------------------------
-        BMR = False
+        BMR = True
         if BMR:
-            mixture = 0.8
-            # A_identity = torch.stack([
-            #     torch.tensor([[1., 0.], [0., 1.]])
-            #     for _ in range(self.A.shape[0])
-            # ]).view(*self.A.shape)
-            
-            # A_reduced_params = (
-            #     mixture * self.A_params 
-            #     + (1 - mixture) * A_identity  # torch.softmax(shrinkage * A_identity, dim=-2)
-            # )
+            # self.A_joint = torch.log(A_joint_posterior + 1)
+            self.A_joint = 0.6 * A_joint_posterior
 
+            # mixture = 0.8
+            # A_joint_reduced = (
+            #     mixture * self.A_joint 
+            #     + (1 - mixture) * torch.log(self.A_joint + 1e-9)
+            # )
+    
             # # Update model parameters if they reduce the free energy
-            # self.delta_F = []
-            # for factor_idx in range(len(self.s)):
-            #     delta_F = delta_free_energy(
-            #         A_posterior_params[factor_idx].flatten(), 
-            #         self.A_params[factor_idx].flatten(), 
-            #         A_reduced_params[factor_idx].flatten()
-            #     )
-            #     self.delta_F.append(delta_F)  # Data collection
-            #     if delta_F < 0:
-            #         # Reduced model is preferred -> replace full model with reduced model
-            #         self.A_params[factor_idx] = A_reduced_params[factor_idx]
-            #         # print(f"Factor {factor_idx}: Reduced model is preferred.")
-            #         # print(f"Delta F: {delta_F}")
-            #         # print(f"Reduced: {A_reduced_params[factor_idx]}")
-            #         # print(f"Posterior: {A_posterior_params[factor_idx]}")
-            #     else:
-            #         # Full model is preferred -> update posterior
-            #         self.A_params[factor_idx] = A_posterior_params[factor_idx]
+            # delta_F = delta_free_energy(
+            #     A_joint_posterior.flatten(), 
+            #     self.A_joint.flatten(), 
+            #     A_joint_reduced.flatten()
+            # )
+            # if delta_F < 0:
+            #     print('reduced')
+            #     # Reduced model is preferred -> replace full model with reduced model
+            #     self.A_joint = A_joint_reduced
+            #     # print(f"Factor {factor_idx}: Reduced model is preferred.")
+            #     # print(f"Delta F: {delta_F}")
+            #     # print(f"Reduced: {A_reduced_params[factor_idx]}")
+            #     # print(f"Posterior: {A_posterior_params[factor_idx]}")
+            # else:
+            #     # Full model is preferred -> update posterior
+            #     self.A_joint = A_joint_posterior
         else:
             self.A_joint = A_joint_posterior
 
