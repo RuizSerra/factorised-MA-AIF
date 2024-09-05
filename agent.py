@@ -38,7 +38,6 @@ class Agent:
         self.alpha = [torch.ones(num_actions) for _ in range(num_agents)]  # Dirichlet state prior
         self.A_params = torch.ones((num_agents, num_actions, num_actions))
         # self.A_params = torch.stack([torch.eye(num_actions) for _ in range(num_agents)]) + 1e-9  # Identity observation model
-        # self.A = [torch.eye(num_actions) for _ in range(num_agents)]  # Identity observation model
         self.A = self.A_params / self.A_params.sum(dim=1, keepdim=True)
         self.A_joint = torch.ones((num_actions,) * 2 * num_agents)  # Joint observation model
         # self.B_params = torch.ones((num_agents, num_actions, num_actions, num_actions))
@@ -574,6 +573,7 @@ class Agent:
         self.u_history = torch.tensor(self.u_history)  # Shape: (T, )
     
         self.learn_A()
+        self.learn_A_joint()
         # self.learn_B()
 
         # Reset history
@@ -688,7 +688,7 @@ class Agent:
 
         self.B = self.B_params / self.B_params.sum(dim=2, keepdim=True)
 
-    def learn_A_joint(self, o):
+    def learn_A_joint(self, o=None):
         '''
         Compute the joint observation likelihood
 
@@ -699,13 +699,18 @@ class Agent:
             o (torch.Tensor): Observation tensor of shape (n_agents, n_actions),
                 i.e. one-hot encoding of actions for each agent
         '''
-        # TODO: learn every timestep or every few steps as in other learning methods?
-        # TODO: BMR
-
         n_agents = self.A.shape[0]  # Number of agents (including self)
         n_actions = self.A.shape[-1]  # Number of actions
+        if o is None:
+            T = len(self.s_history) # Number of timesteps
+            s_history = self.s_history
+            o_history = self.o_history
+        else:
+            T = 1
+            s_history = [self.s] 
+            o_history = [o] 
 
-        # Compute joint state prior:
+
         # Create the einsum subscripts string dynamically for n_agents
         # e.g., if n_agents = 3, this will be 'i,j,k->ijk'
         einsum_str = (
@@ -713,14 +718,58 @@ class Agent:
             + '->' 
             + ''.join([chr(105 + i) for i in range(n_agents)])
         )
-        q_s_joint = torch.einsum(einsum_str, *[self.s[i] for i in range(n_agents)])
-        assert q_s_joint.shape == (n_actions, ) * (n_agents), f"q_s_joint shape {q_s_joint.shape} is not correct."
 
-        o_indices = tuple([torch.argmax(o[factor_idx]).item() for factor_idx in range(n_agents)])
-        assert self.A_joint[o_indices].shape == q_s_joint.shape, f"A_joint[o_indices] shape {self.A_joint[o_indices].shape} is not correct."
-        self.A_joint[o_indices] += q_s_joint
+        A_joint_posterior = self.A_joint.clone()
+        for t in range(T):
+            s_t = s_history[t]  # Shape: (n_agents, n_actions)
+            o_t = o_history[t]  # Shape: (n_agents, n_actions)
 
-        self.A_joint = self.A_joint / self.A_joint.sum()
+            # Compute joint state prior
+            q_s_joint = torch.einsum(einsum_str, *[s_t[factor_idx] for factor_idx in range(n_agents)])
+            assert q_s_joint.shape == (n_actions, ) * (n_agents), f"q_s_joint shape {q_s_joint.shape} is not correct."
+
+            o_indices = tuple([torch.argmax(o_t[factor_idx]).item() for factor_idx in range(n_agents)])
+            assert self.A_joint[o_indices].shape == q_s_joint.shape, f"A_joint[o_indices] shape {self.A_joint[o_indices].shape} is not correct."
+            
+            A_joint_posterior[o_indices] += q_s_joint
+
+        # Bayesian Model Reduction ---------------------------------------------
+        BMR = False
+        if BMR:
+            mixture = 0.8
+            # A_identity = torch.stack([
+            #     torch.tensor([[1., 0.], [0., 1.]])
+            #     for _ in range(self.A.shape[0])
+            # ]).view(*self.A.shape)
+            
+            # A_reduced_params = (
+            #     mixture * self.A_params 
+            #     + (1 - mixture) * A_identity  # torch.softmax(shrinkage * A_identity, dim=-2)
+            # )
+
+            # # Update model parameters if they reduce the free energy
+            # self.delta_F = []
+            # for factor_idx in range(len(self.s)):
+            #     delta_F = delta_free_energy(
+            #         A_posterior_params[factor_idx].flatten(), 
+            #         self.A_params[factor_idx].flatten(), 
+            #         A_reduced_params[factor_idx].flatten()
+            #     )
+            #     self.delta_F.append(delta_F)  # Data collection
+            #     if delta_F < 0:
+            #         # Reduced model is preferred -> replace full model with reduced model
+            #         self.A_params[factor_idx] = A_reduced_params[factor_idx]
+            #         # print(f"Factor {factor_idx}: Reduced model is preferred.")
+            #         # print(f"Delta F: {delta_F}")
+            #         # print(f"Reduced: {A_reduced_params[factor_idx]}")
+            #         # print(f"Posterior: {A_posterior_params[factor_idx]}")
+            #     else:
+            #         # Full model is preferred -> update posterior
+            #         self.A_params[factor_idx] = A_posterior_params[factor_idx]
+        else:
+            self.A_joint = A_joint_posterior
+
+        # TODO: do we need to normalise or not? If it is a likelihood *function*, no need.
 
 
 def multivariate_beta(alpha):
