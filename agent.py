@@ -748,14 +748,8 @@ class Agent:
         # Bayesian Model Reduction ---------------------------------------------
         BMR = True
         if BMR:
-            # self.A_joint = torch.log(A_joint_posterior + 1)
             self.A_joint = self.decay * A_joint_posterior
-
-            # mixture = 0.8
-            # A_joint_reduced = (
-            #     mixture * self.A_joint 
-            #     + (1 - mixture) * torch.log(self.A_joint + 1e-9)
-            # )
+            # A_joint_reduced = self.decay * A_joint_posterior
     
             # # Update model parameters if they reduce the free energy
             # delta_F = delta_free_energy(
