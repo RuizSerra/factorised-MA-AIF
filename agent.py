@@ -35,7 +35,7 @@ class Agent:
         num_agents = game_matrix.ndim  # Number of players (rank of game tensor)
 
         # Generative model/variational posterior parameters
-        self.alpha = [torch.ones(num_actions) for _ in range(num_agents)]  # Dirichlet state prior
+        self.theta = [torch.ones(num_actions) for _ in range(num_agents)]  # Dirichlet state prior
         self.A_params = torch.ones((num_agents, num_actions, num_actions))  # Flat observation model prior
         # self.A_params = torch.stack([torch.eye(num_actions) for _ in range(num_agents)]) + 1e-9  # Identity observation model prior
         self.A = self.A_params / self.A_params.sum(dim=1, keepdim=True)
@@ -49,7 +49,7 @@ class Agent:
         self.B = self.B_params / self.B_params.sum(dim=2, keepdim=True)
         self.log_C = game_matrix.to(torch.float)  # Payoffs for joint actions (in matrix form, from row player's perspective) (force to float)
         self.prob_C = None
-        self.s = torch.stack([Dirichlet(alpha).mean for alpha in self.alpha])  # Categorical state prior (D)
+        self.s = torch.stack([Dirichlet(theta).mean for theta in self.theta])  # Categorical state prior (D)
         self.E = torch.ones(num_actions) / num_actions  # Habits 
 
         # Store blanket states history for learning
@@ -159,7 +159,7 @@ class Agent:
         (i.e. the action taken by each agent).
 
         Employs self.A (observation model) and self.B (transition model),
-        and updates the variational parameters self.alpha for each agent
+        and updates the variational parameters self.theta for each agent
         through a Monte Carlo approximation of the variational free energy.
 
         Args:
@@ -178,7 +178,7 @@ class Agent:
             log_prior = torch.log(self.B[factor_idx, self.action] @ s_prev + 1e-9)  # New prior is old posterior
             log_likelihood = torch.log(self.A[factor_idx].T @ o[factor_idx] + 1e-9)  # Probability of observation given hidden states
 
-            variational_params = self.alpha[factor_idx].clone().detach().requires_grad_(True)  # Variational Dirichlet distribution for each factor (agent)
+            variational_params = self.theta[factor_idx].clone().detach().requires_grad_(True)  # Variational Dirichlet distribution for each factor (agent)
             optimizer = torch.optim.Adam([variational_params], lr=learning_rate)
 
             for _ in range(num_iterations):
@@ -195,7 +195,7 @@ class Agent:
 
             # Results of variational inference: variational posterior, variational parameters, VFE
             self.s[factor_idx] = Dirichlet(variational_params).mean.detach()  # Variational posterior
-            self.alpha[factor_idx] = variational_params.detach()  # Store variational parameters (for next timestep)
+            self.theta[factor_idx] = variational_params.detach()  # Store variational parameters (for next timestep)
             self.VFE[factor_idx] = VFE.detach()
             
             # Compute additional metrics (for validation and plotting)
