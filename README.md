@@ -7,9 +7,9 @@ Factorised Active Inference Agents for Multi-Agent Interactions
 
 ## Start here
 
-1. [`notebooks/01 Iterated normal-form games.ipynb`]("./notebooks/01 Iterated normal-form games.ipynb"): Jupyter notebook with simulation and plotting of iterated normal-form games
+1. [`notebooks/`](./notebooks/)`01 Iterated normal-form games.ipynb`: Jupyter notebook with simulation and plotting of iterated normal-form games
 2. [`docs/computational-graph.png`](./docs/computational-graph.png): Computational graph of the factorised active inference agent
-3. [`notebooks/99 FAQ.ipynb`]("./notebooks/99 FAQ.ipynb"): Additional notebook with some explanations and examples
+3. [`notebooks/`](./notebooks/)`99 FAQ.ipynb`: Additional notebook with some explanations and examples
 
 ## Codebase structure
 
