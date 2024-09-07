@@ -97,8 +97,46 @@ hawk_dove_2player = torch.tensor([
     [c_payoff, d]  # Dove vs. [Hawk, Dove]
 ])
 
-
 hawk_dove_2player += EPSILON
+
+
+
+#Attachment game (Buono et al)
+import torch
+
+# Define the parameters for the attachment game
+v = 1  # Value (comfort) if the child goes to the mother and the mother attends
+s = 1  # Stress if the child goes to the mother and is ignored
+c = 0.5  # Cost for the mother attending to the child
+
+# Compute the payoffs
+# Format is: (Child's payoff, Mother's payoff)
+
+go_attend = (v, v - c)          # Child goes to the mother, mother attends
+go_ignore = (-s, -s)            # Child goes to the mother, mother ignores
+dont_go_attend = (0, -c)        # Child doesn't go to the mother, mother attends
+dont_go_ignore = (0, 0)         # Child doesn't go to the mother, mother ignores
+
+# Create the payoff matrix for the 2x2 attachment game
+# Child's actions: [Go, Don't Go]
+# Mother's actions: [Attend, Ignore]
+
+attachment_game_2player_child = torch.tensor([
+    [go_attend[0], go_ignore[0]],       # Child's payoffs when [Attend, Ignore]
+    [dont_go_attend[0], dont_go_ignore[0]]  # Child's payoffs when [Attend, Ignore]
+])
+
+attachment_game_2player_mother = torch.tensor([
+    [go_attend[1], go_ignore[1]],       # Mother's payoffs when [Go, Don't Go]
+    [dont_go_attend[1], dont_go_ignore[1]]  # Mother's payoffs when [Go, Don't Go]
+])
+
+# Optional: Add small epsilon to avoid zero values
+EPSILON = 1e-6
+attachment_game_2player_child += EPSILON
+attachment_game_2player_mother += EPSILON
+
+
 
 # ==============================================================================
 # 2 Player, 3 action games
