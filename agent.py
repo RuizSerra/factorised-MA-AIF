@@ -15,6 +15,9 @@ from torch.distributions.kl import kl_divergence
 torch.set_printoptions(precision=2)
 
 class Agent:
+    
+    PROPRIOCEPTION = False
+
     def __init__(self, id=None, game_matrix=None, beta_1=1, decay=0.99, dynamic_precision=False):
 
         # ========================================
@@ -172,7 +175,32 @@ class Agent:
         Returns:
             s (torch.Tensor): Hidden state tensor of shape (n_agents, n_actions)
         '''
-        for factor_idx in range(len(self.s)):  # Loop over each state factor (me + the other agents)
+        if self.PROPRIOCEPTION:
+            '''
+            If proprioception is enabled, ego can perceive the true hidden state for the ego factor, 
+            i.e. q(s_i) = q(u_i)
+            and will have to infer the hidden states of the other agents ("theory of mind")
+            '''
+            # Ego factor
+            factor_idx = 0
+            self.s[factor_idx] = self.q_u.clone().detach()  # Ego factor is the previous timestep's policy
+            self.theta[factor_idx] = torch.zeros_like(self.theta[factor_idx])  # PLACEHOLDER
+            self.VFE[factor_idx] = 0  # PLACEHOLDER
+            self.entropy[factor_idx] = 0  # PLACEHOLDER
+            self.energy[factor_idx] = 0  # PLACEHOLDER
+            self.accuracy[factor_idx] = 0  # PLACEHOLDER
+            self.complexity[factor_idx] = 0  # PLACEHOLDER
+            # Alter factors
+            factors = range(1, len(self.s))
+        else:
+            '''
+            Otherwise, ego has to infer all hidden states including its own, 
+            i.e. "introspection" (towards self) and "theory of mind" (towards others)
+            '''
+            factors = range(len(self.s))
+        
+        # Iterate over (remaining) factors
+        for factor_idx in factors:
             s_prev = self.s[factor_idx].clone().detach()  # State t-1
             assert torch.allclose(s_prev.sum(), torch.tensor(1.0)), "s_prev tensor does not sum to 1."
             log_prior = torch.log(self.B[factor_idx, self.action] @ s_prev + 1e-9)  # New prior is old posterior
