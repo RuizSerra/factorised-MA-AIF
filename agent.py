@@ -231,11 +231,11 @@ class Agent:
         self.q_s_u = torch.empty((n_actions, n_agents, n_actions))  # q(s|u_i) posterior predictive state distribution (for each factor) conditional on action u_i
         
         EFE = torch.zeros(n_actions)  # n-action length vector of zeros
-        ambiguity = torch.zeros(n_actions)  # n-action length vector of zeros
-        risk = torch.zeros(n_actions)  # n-action length vector of zeros
-        salience = torch.zeros(n_actions)  # n-action length vector of zeros
-        pragmatic_value = torch.zeros(n_actions)  # n-action length vector of zeros
-        
+        ambiguity = torch.zeros(n_actions)
+        joint_risk = torch.zeros(n_actions)
+        # risk = torch.zeros(n_actions)
+        # salience = torch.zeros(n_actions)
+        # pragmatic_value = torch.zeros(n_actions)
         novelty = torch.zeros((n_actions,))
         
         # For each action
@@ -273,130 +273,47 @@ class Agent:
             assert q_o_joint_u.shape == (n_actions, ) * (n_agents-1), f"q_o_joint_u shape {q_o_joint_u.shape} is not correct."
             assert torch.allclose(q_o_joint_u.sum(), torch.tensor(1.0)), f"q_o_joint_u tensor does not sum to 1 ({q_o_joint_u.sum()})."
             
-            # For each factor, the expected value is the value of the states (log C), multiplied b y the action probabilities of the opponent
+            # Expected ambiguity term (per factor)
             for factor_idx in range(n_agents):
 
                 H = -torch.diag(self.A[factor_idx] @ torch.log(self.A[factor_idx] + 1e-9))  # Conditional (pseudo?) entropy (of the generated emissions matrix)
-                assert H.ndimension() == 1, "H (F0) is not a 1-dimensional tensor"
+                assert H.ndimension() == 1, "H is not a 1-dimensional tensor"
 
                 # Posterior predictive state for factor is E_{q(s)}[p(s'|s, u_i)]
                 s_pred = q_s_u[factor_idx]  # shape (2, )
+                assert s_pred.ndimension() == 1, "s_pred is not a 1-dimensional tensor"
                 
-                ### ==== MY PREFERENCES OVER MY ACTIONS === ### -  [What I wish to observe me doing, given what I expect they will do]
-                if factor_idx == 0:
-                    
-                    # Posterior predictive observation for ego is the 
-                    # one-hot encoding of the action currently under consideration
-                    q_o_u = torch.tensor(
-                        [1.0 if _ == u_i else 0.0 for _ in range(n_actions)]
-                    )  # shape (2, )
+                ambiguity[u_i] += (H @ s_pred) # Ambiguity is conditional entropy of emissions
+                # FIXME: not sure if these definitions are correct
+                # risk[u_i] += (o_pred @ (torch.log(o_pred + 1e-9)))  - (o_pred @ log_C_modality) # Risk is negative posterior predictive entropy minus pragmatic value
+                # salience[u_i] += -(o_pred @ (torch.log(o_pred + 1e-9)))  - (H @ s_pred) # Salience is negative posterior predictive entropy minus ambiguity (0)
+                # pragmatic_value[u_i] += (o_pred @ log_C_modality) # Pragmatic value is negative cross-entropy
 
-                    # Posterior predictive observation (joint for alters)
-                    # q_o_others_u = torch.sum(q_o_joint_u, dim=factor_idx)  # shape (2, 2)
-                    q_o_others_u = q_o_joint_u  # we already selected u_i for the ego factor; shape (2, 2)
+            # Risk term (joint) = KL[q(o|u) || p(o)]
+            joint_risk[u_i] = torch.tensordot(
+                (torch.log(q_o_joint_u + 1e-9) - self.log_C[u_i]),
+                q_o_joint_u
+            )
 
-                    # dimensions = list(range(n_agents))
-                    # dimensions.remove(factor_idx)
 
-                    # This factor's preferences are the expected value of the joint payoffs
-                    # under the joint (marginal) posterior predictive observation
-                    #   in math: log C^i = E_{q(o_{-i}|u_i)}[log C]
-                    #   in code: log_C_modality = E_{q_o_others_u}[self.log_C]
-                    indices_left = list(range(1, n_agents))     # [1, ..., n-1] 
-                    indices_right = list(range(n_agents - 1))   # [0, ..., n-2]
-                    log_C_modality = torch.tensordot(
-                        self.log_C,     # (2, 2, 2)
-                        q_o_others_u,   #    (2, 2)
-                        dims=(indices_left, indices_right)
-                    )  # (2, )
-                    # log_C_modality = torch.log(torch.exp(self.log_C).sum(dim=tuple(dimensions)))
-                    
-                ### ==== MY PREFERENCES OVER THEIR ACTIONS === [what I wish to observe j doing, given what I plan on doing, and what I expect k will do]
-                else:  
-
-                    # Compute this factor's preferences and posterior predictive state
-                    if n_agents == 2:
-                        '''
-                        Special case for 2 agents: if we were to marginalise there would be no distribution left, so we index straight from the tensors
-                        '''
-                        raise NotImplementedError("Special case for 2 agents not implemented yet.")
-                        log_C_modality = self.log_C[u_i]
-                        # q_o_u = TODO
-                    elif n_agents > 2:
-                        '''
-                        General case for n agents: marginalise out the current factor agent to get expected probs for all other agents (not i, not j)
-                            Example for n=3 agents (i, j, k): 
-                                q(o_{-j}|u_i) = q(o_i=u_i, o_k | u_i) = sum_{u_j} q(o_i, o_j, o_k | u_i)
-                        '''
-                        
-                        # Posterior predictive observation for alters is
-                        # the marginal distribution of the joint observation (marginalising all others)
-                        # FIXME: or should the ego variable take the value u_i here?
-                        # dimensions = torch.arange(n_agents)
-                        # dimensions = torch.cat((dimensions[:factor_idx], dimensions[factor_idx+1:]))  # marginalise out all others (except current factor)
-                        # q_o_u = torch.sum(q_o_joint_u, dim=tuple(dimensions))  # shape (2, )
-                        dimensions = list(range(n_agents-1))  # [0, 1, ..., n-2] all agents (ego was already removed by selecting action; shift indices back by one)
-                        dimensions.remove(factor_idx-1)  # remove current factor
-                        q_o_u = torch.sum(q_o_joint_u, dim=dimensions)  # shape (2, )
-                        
-                        # Posterior predictive observation (joint for others except current factor)
-                        # i.e. marginalise current factor
-                        # q_o_others_u = torch.sum(q_o_joint_u, dim=factor_idx)  # shape (2, 2)
-                        q_o_others_u = torch.sum(q_o_joint_u, dim=factor_idx-1)  # shape (2,)
-
-                        # This factor's preferences are the expected value of the joint payoffs
-                        # under the joint (marginal) posterior predictive observation
-                        #   in math: log C^j = E_{q(o_{-j}|u_i)}[log C]
-                        #   in code: log_C_modality = E_{q_o_others_u}[self.log_C]
-                        indices_left = list(range(n_agents-1))     # [1, ..., n-1] 
-                        indices_left.remove(factor_idx-1)  # remove current factor
-                        indices_right = list(range(q_o_others_u.ndim))   # [0, ..., n-2]
-                        log_C_modality = torch.tensordot(
-                            self.log_C[u_i],     # (2, 2)
-                            q_o_others_u,        # (2,)
-                            dims=(indices_left, indices_right)
-                        )  # (2, )
-                        # log_C_modality = torch.log(torch.exp(self.log_C).sum(dim=tuple(dimensions)))
-                        
-                assert q_o_u.squeeze().shape == (n_actions, ), f'Wrong shape {q_o_u.squeeze().shape} for q_o_u.'
-                
-                self.q_s_u[u_i, factor_idx] = s_pred
-                assert torch.allclose(s_pred.sum(), torch.tensor(1.0)), f"s_pred (factor {factor_idx}) tensor does not sum to 1."
-                assert log_C_modality.ndimension() == 1, f"log_C_modality (factor {factor_idx}) is not a 1-dimensional tensor."
-                # assert torch.allclose(torch.exp(log_C_modality).sum(), torch.FloatTensor(n_agents)), "C does not sum to n agents."  # TODO: Legit check for C that each modality is a prob dist? )
-            
-                # Posterior predictive observation(s) for both factors
-                # o_pred = self.A[factor_idx] @ s_pred  # In the earlier version, the predicted observation came from the factor model
-                o_pred = q_o_u  # Now the prediced observation comes from the joint model
-                assert torch.allclose(o_pred.sum(), torch.tensor(1.0)), f"o_pred (factor {factor_idx}) tensor does not sum to 1."
-                assert o_pred.shape == (n_actions, ), f"o_pred (factor {factor_idx}) tensor is not the correct shape."
-                # self.q_o_u[u_i, factor_idx] = o_pred
-                
-                # EFE = Expected ambiguity + risk 
-                EFE[u_i] += H @ s_pred + (o_pred @ (torch.log(o_pred + 1e-9) - log_C_modality))
-
-                ambiguity[u_i] += (H @ s_pred) # Ambiguity is conditional entropy of emissions (0)
-                risk[u_i] += (o_pred @ (torch.log(o_pred + 1e-9)))  - (o_pred @ log_C_modality) # Risk is negative posterior predictive entropy minus pragmatic value
-                salience[u_i] += -(o_pred @ (torch.log(o_pred + 1e-9)))  - (H @ s_pred) # Salience is negative posterior predictive entropy minus ambiguity (0)
-                pragmatic_value[u_i] += (o_pred @ log_C_modality) # Pragmatic value is negative cross-entropy
-                self.log_C_modality[factor_idx] = log_C_modality
-
-            assert torch.allclose(risk[u_i] + ambiguity[u_i], EFE[u_i], atol=1e-4), f"[u_i = {u_i}] risk + ambiguity ({risk[u_i]} + {ambiguity[u_i]}={risk[u_i] + ambiguity[u_i]}) does not equal EFE (={EFE[u_i]})"
-            assert torch.allclose(-salience[u_i] - pragmatic_value[u_i], EFE[u_i], atol=1e-4), f"[u_i = {u_i}] -salience - pragmatic value (-{salience[u_i]} - {pragmatic_value[u_i]}={-salience[u_i] - pragmatic_value[u_i]}) does not equal EFE (={EFE[u_i]})"
-            assert not torch.isnan(EFE[u_i]), f"EFE[{u_i}] is NaN"
+            # assert torch.allclose(risk[u_i] + ambiguity[u_i], EFE[u_i], atol=1e-4), f"[u_i = {u_i}] risk + ambiguity ({risk[u_i]} + {ambiguity[u_i]}={risk[u_i] + ambiguity[u_i]}) does not equal EFE (={EFE[u_i]})"
+            # assert torch.allclose(-salience[u_i] - pragmatic_value[u_i], EFE[u_i], atol=1e-4), f"[u_i = {u_i}] -salience - pragmatic value (-{salience[u_i]} - {pragmatic_value[u_i]}={-salience[u_i] - pragmatic_value[u_i]}) does not equal EFE (={EFE[u_i]})"
+            # assert not torch.isnan(EFE[u_i]), f"EFE[{u_i}] is NaN"
         
             # Novelty ----------------------------------------------------------
             # novelty[u_i] = self.compute_A_novelty(u_i)
 
+        EFE = ambiguity + joint_risk
         EFE = EFE - novelty
-        assert not torch.isnan(EFE[u_i]), f"EFE[{u_i}] is NaN"
+        assert not torch.any(torch.isnan(EFE)), f"EFE has NaN: {EFE}"
 
         # Data collection ------------------------------------------------------
         self.EFE = EFE
         self.ambiguity = ambiguity
-        self.risk = risk
-        self.salience = salience
-        self.pragmatic_value = pragmatic_value
+        self.joint_risk = joint_risk
+        # self.risk = risk
+        # self.salience = salience
+        # self.pragmatic_value = pragmatic_value
         self.novelty = novelty
         
         return EFE
