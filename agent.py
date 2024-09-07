@@ -303,16 +303,17 @@ class Agent:
             )
             q_s_joint_u = torch.einsum(einsum_str, *[q_s_u[i] for i in range(n_agents)])
             assert q_s_joint_u.shape == (n_actions, ) * (n_agents), f"q_s_joint_u shape {q_s_joint_u.shape} is not correct."
+            assert torch.allclose(q_s_joint_u.sum(), torch.tensor(1.0)), f"q_s_joint_u tensor does not sum to 1 ({q_s_joint_u.sum()})."
             
             # Joint predictive observation posterior ---------------------------
             indices_left = list(range(n_agents, n_agents*2))  # [3, 4, 5]
             indices_right = list(range(n_agents))  # [3, 4, 5]
-            q_o_joint_u = torch.tensordot(
+            q_o_joint_u_full = torch.tensordot(
                 self.A_joint,  # (2, 2, 2, 2, 2, 2)
                 q_s_joint_u,   #          (2, 2, 2) 
                 dims=(indices_left, indices_right)
             )  # (2, 2, 2)
-            q_o_joint_u = q_o_joint_u[u_i]  # Select the action u_i, so shape is now (2, 2)
+            q_o_joint_u = q_o_joint_u_full[u_i]  # Select the action u_i, so shape is now (2, 2)
             q_o_joint_u = q_o_joint_u / q_o_joint_u.sum()  # Normalise to a probability distribution
 
             assert q_o_joint_u.shape == (n_actions, ) * (n_agents-1), f"q_o_joint_u shape {q_o_joint_u.shape} is not correct."
@@ -338,7 +339,8 @@ class Agent:
         
             # Novelty ----------------------------------------------------------
             if NOVELTY:
-                novelty[u_i] = self.compute_A_novelty(u_i)
+                novelty[u_i] += self.compute_A_novelty(u_i)
+                novelty[u_i] += self.compute_A_joint_novelty(u_i, q_s_joint_u, q_o_joint_u_full)
 
         EFE = ambiguity + joint_risk - novelty
         assert not torch.any(torch.isnan(EFE)), f"EFE has NaN: {EFE}"
@@ -494,8 +496,39 @@ class Agent:
             s_pred = self.q_s_u[u_i, factor_idx]
             novelty += torch.dot(
                 self.A[factor_idx] @ s_pred, 
-                W[factor_idx] @ s_pred) 
+                W[factor_idx] @ s_pred)
         return novelty
+    
+    def compute_A_joint_novelty(self, u_i, q_s_joint_u, q_o_joint_u_full):
+        '''
+        Compute the novelty of the joint likelihood model A_joint for action u_i
+        '''
+        n_agents = len(self.s)
+        n_actions = self.s[0].shape[0]
+
+        A_joint_posterior = self.A_joint.clone()
+
+        # Function to generate einsum indices using chr()
+        indices_1 = ''.join(chr(97 + i) for i in range(n_agents))  # for q_s_joint_u
+        indices_2 = ''.join(chr(97 + i) for i in range(n_agents, n_agents + n_agents))  # for q_o_joint_u
+        result_indices = indices_1 + indices_2  # concatenated indices
+        einsum_str = f'{indices_1},{indices_2}->{result_indices}'
+
+        # Compute the outer product using the generated einsum string
+        outer_product = torch.einsum(einsum_str, q_s_joint_u, q_o_joint_u_full)  # FIXME: should o_i be u_i?
+        assert outer_product.shape == (n_actions,) * (2 * n_agents), (
+            f"Outer product shape {outer_product.shape} is not correct."
+        )
+        
+        A_joint_posterior += outer_product
+
+        Dirichlet(self.A_joint.flatten()).mean
+
+        return kl_divergence(
+            Dirichlet(A_joint_posterior.flatten()),   # FIXME: Dirichlet or Categorical?
+            Dirichlet(self.A_joint.flatten())
+        )
+
 
     def select_action(self):
         EFE = self.compute_efe()
@@ -674,7 +707,6 @@ class Agent:
             T = 1
             s_history = [self.s] 
             o_history = [o] 
-
 
         # Create the einsum subscripts string dynamically for n_agents
         # e.g., if n_agents = 3, this will be 'i,j,k->ijk'
