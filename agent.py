@@ -14,9 +14,11 @@ from torch.distributions.kl import kl_divergence
 
 torch.set_printoptions(precision=2)
 
+PROPRIOCEPTION = False
+JOINT_AMBIGUITY = False
+NOVELTY = False
+
 class Agent:
-    
-    PROPRIOCEPTION = False
 
     def __init__(self, id=None, game_matrix=None, beta_1=1, decay=0.99, dynamic_precision=False):
 
@@ -175,7 +177,7 @@ class Agent:
         Returns:
             s (torch.Tensor): Hidden state tensor of shape (n_agents, n_actions)
         '''
-        if self.PROPRIOCEPTION:
+        if PROPRIOCEPTION:
             '''
             If proprioception is enabled, ego can perceive the true hidden state for the ego factor, 
             i.e. q(s_i) = q(u_i)
@@ -269,39 +271,13 @@ class Agent:
         # For each action
         for u_i in range(n_actions):
 
-            # -----------------------------------------------------------
-            # Compute predictive joint state posterior
-            
-            # Create the einsum subscripts string dynamically for n_agents
-            # e.g., if n_agents = 3, this will be 'i,j,k->ijk'
-            einsum_str = (
-                ','.join([chr(105 + i) for i in range(n_agents)]) 
-                + '->' 
-                + ''.join([chr(105 + i) for i in range(n_agents)])
-            )
+            # Predictive state posterior (per factor) --------------------------
             q_s_u = torch.stack(
                 [self.B[factor_idx, u_i] @ self.s[factor_idx]  # Predicted state q(s' | s, u_i) for each factor (agent)
                 for factor_idx in range(n_agents)]
             )
-            q_s_joint_u = torch.einsum(einsum_str, *[q_s_u[i] for i in range(n_agents)])
-            assert q_s_joint_u.shape == (n_actions, ) * (n_agents), f"q_s_joint_u shape {q_s_joint_u.shape} is not correct."
-            
-            # -----------------------------------------------------------
-            # Compute predictive joint observation posterior
-            indices_left = list(range(n_agents, n_agents*2))  # [3, 4, 5]
-            indices_right = list(range(n_agents))  # [3, 4, 5]
-            q_o_joint_u = torch.tensordot(
-                self.A_joint,  # (2, 2, 2, 2, 2, 2)
-                q_s_joint_u,   #          (2, 2, 2) 
-                dims=(indices_left, indices_right)
-            )  # (2, 2, 2)
-            q_o_joint_u = q_o_joint_u[u_i]  # Select the action u_i, so shape is now (2, 2)
-            q_o_joint_u = q_o_joint_u / q_o_joint_u.sum()  # Normalise to a probability distribution
 
-            assert q_o_joint_u.shape == (n_actions, ) * (n_agents-1), f"q_o_joint_u shape {q_o_joint_u.shape} is not correct."
-            assert torch.allclose(q_o_joint_u.sum(), torch.tensor(1.0)), f"q_o_joint_u tensor does not sum to 1 ({q_o_joint_u.sum()})."
-            
-            # Expected ambiguity term (per factor)
+            # Expected ambiguity term (per factor) -----------------------------
             for factor_idx in range(n_agents):
 
                 H = -torch.diag(self.A[factor_idx] @ torch.log(self.A[factor_idx] + 1e-9))  # Conditional (pseudo?) entropy (of the generated emissions matrix)
@@ -317,7 +293,40 @@ class Agent:
                 # salience[u_i] += -(o_pred @ (torch.log(o_pred + 1e-9)))  - (H @ s_pred) # Salience is negative posterior predictive entropy minus ambiguity (0)
                 # pragmatic_value[u_i] += (o_pred @ log_C_modality) # Pragmatic value is negative cross-entropy
 
-            # Risk term (joint) = KL[q(o|u) || p(o)]
+            # Joint predictive state posterior ---------------------------------
+            # Create the einsum subscripts string dynamically for n_agents
+            # e.g., if n_agents = 3, this will be 'i,j,k->ijk'
+            einsum_str = (
+                ','.join([chr(105 + i) for i in range(n_agents)]) 
+                + '->' 
+                + ''.join([chr(105 + i) for i in range(n_agents)])
+            )
+            q_s_joint_u = torch.einsum(einsum_str, *[q_s_u[i] for i in range(n_agents)])
+            assert q_s_joint_u.shape == (n_actions, ) * (n_agents), f"q_s_joint_u shape {q_s_joint_u.shape} is not correct."
+            
+            # Joint predictive observation posterior ---------------------------
+            indices_left = list(range(n_agents, n_agents*2))  # [3, 4, 5]
+            indices_right = list(range(n_agents))  # [3, 4, 5]
+            q_o_joint_u = torch.tensordot(
+                self.A_joint,  # (2, 2, 2, 2, 2, 2)
+                q_s_joint_u,   #          (2, 2, 2) 
+                dims=(indices_left, indices_right)
+            )  # (2, 2, 2)
+            q_o_joint_u = q_o_joint_u[u_i]  # Select the action u_i, so shape is now (2, 2)
+            q_o_joint_u = q_o_joint_u / q_o_joint_u.sum()  # Normalise to a probability distribution
+
+            assert q_o_joint_u.shape == (n_actions, ) * (n_agents-1), f"q_o_joint_u shape {q_o_joint_u.shape} is not correct."
+            assert torch.allclose(q_o_joint_u.sum(), torch.tensor(1.0)), f"q_o_joint_u tensor does not sum to 1 ({q_o_joint_u.sum()})."
+
+            # Expected ambiguity term (joint) ----------------------------------
+            if JOINT_AMBIGUITY:
+                A_joint_square = self.A_joint.view(n_actions ** n_agents, n_actions ** n_agents)
+                H = -torch.diag(A_joint_square @ torch.log(A_joint_square + 1e-9))
+                assert H.ndimension() == 1, "H is not a 1-dimensional tensor"
+                ambiguity[u_i] += (H @ q_s_joint_u.view(n_actions ** n_agents)) / (n_actions ** n_agents)  # Regularize by size of square matrix
+
+            # Risk term (joint) ------------------------------------------------
+            # i.e. KL[q(o|u) || p(o)]
             joint_risk[u_i] = torch.tensordot(
                 (torch.log(q_o_joint_u + 1e-9) - self.log_C[u_i]),
                 q_o_joint_u
@@ -328,10 +337,10 @@ class Agent:
             # assert not torch.isnan(EFE[u_i]), f"EFE[{u_i}] is NaN"
         
             # Novelty ----------------------------------------------------------
-            # novelty[u_i] = self.compute_A_novelty(u_i)
+            if NOVELTY:
+                novelty[u_i] = self.compute_A_novelty(u_i)
 
-        EFE = ambiguity + joint_risk
-        EFE = EFE - novelty
+        EFE = ambiguity + joint_risk - novelty
         assert not torch.any(torch.isnan(EFE)), f"EFE has NaN: {EFE}"
 
         # Data collection ------------------------------------------------------
