@@ -340,7 +340,7 @@ class Agent:
             # Novelty ----------------------------------------------------------
             if NOVELTY:
                 novelty[u_i] += self.compute_A_novelty(u_i)
-                novelty[u_i] += self.compute_A_joint_novelty(u_i, q_s_joint_u, q_o_joint_u_full)
+                novelty[u_i] += self.compute_A_joint_novelty(q_s_joint_u, q_o_joint_u_full)
 
         EFE = ambiguity + joint_risk - novelty
         assert not torch.any(torch.isnan(EFE)), f"EFE has NaN: {EFE}"
@@ -501,7 +501,7 @@ class Agent:
             print(f"Non-zero novelty (factor) for action {u_i}: {novelty}")
         return novelty
 
-    def compute_A_joint_novelty(self, u_i, q_s_joint_u, q_o_joint_u_full):
+    def compute_A_joint_novelty(self, q_s_joint_u, q_o_joint_u_full):
         '''
         Compute the novelty of the joint likelihood model A_joint for action u_i
         '''
