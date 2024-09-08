@@ -170,48 +170,36 @@ division_game_2player = torch.tensor([
 # ==============================================================================
 
 prisoners_dilemma_3player = torch.tensor([
+    [[ 2., 1.],   # Player 1: C, Player 2: C, Player 3: (C / D) -> (4 / 4)
+     [ 1., 1.]],  # Player 1: C, Player 2: D, Player 3: (C / D) -> (4 / 3)
     
-    # u_i = d ------------
-    [[2., 1.],   # Player 1: D, Player 2: D, Player 3: (D / C) -> (2 / 1)
-     [1., 1.]],  # Player 1: D, Player 2: C, Player 3: (D / C) -> (1 / 1)
-    
-    # u_i = c ------------
-    [[4., 4.],   # Player 1: C, Player 2: D, Player 3: (D / C) -> (4 / 4)
-     [4., 3.]]   # Player 1: C, Player 2: C, Player 3: (D / C) -> (4 / 3)
+    [[ 4., 4.],   # Player 1: D, Player 2: C, Player 3: (C / D) -> (2 / 1)
+     [ 4., 3.]],  # Player 1: D, Player 2: D, Player 3: (C / D) -> (1 / 1)
 ])
 
-# Chicken game: payoffs for Player 1
-# Index order: [Player 1's action, Player 2's action, Player 3's action]
 chicken_3player = torch.tensor([
+    [[ 2.,  2.],  # Player 1: C, Player 2: C, Player 3: (C / D) -> (0 / 0)
+     [ 2.,  2.]], # Player 1: C, Player 2: D, Player 3: (C / D) -> (0 / 0)
     
-    # u_i = d ------------
-    [[-1.,  1.],  # Player 1: D, Player 2: D, Player 3: (D / C) -> (-1 / 1)
-     [ 1.,  1.]], # Player 1: D, Player 2: C, Player 3: (D / C) -> (1 / 1)
-
-    # u_i = c ------------ 
-    [[ 0.,  0.],  # Player 1: C, Player 2: D, Player 3: (D / C) -> (0 / 0)
-     [ 0.,  0.]]  # Player 1: C, Player 2: C, Player 3: (D / C) -> (0 / 0)
+    [[ 4.,  1.],  # Player 1: D, Player 2: C, Player 3: (C / D) -> (-1 / 1)
+     [ 1.,  1.]], # Player 1: D, Player 2: D, Player 3: (C / D) -> (1 / 1)
 ])
 
-harmony_3player = torch.tensor([
-    [[1., 0.],  # Player 1: D, Player 2: D, Player 3: (D / C) -> (1 / 0)
-     [0., 0.]], # Player 1: D, Player 2: C, Player 3: (D / C) -> (0 / 0)
-     
-    [[0., 0.],  # Player 1: C, Player 2: D, Player 3: (D / C) -> (0 / 0)
-     [0., 1.]]  # Player 1: C, Player 2: C, Player 3: (D / C) -> (0 / 1)
+harmony_3player = torch.tensor([     
+    [[ 4., 3.],   # Player 1: C, Player 2: C, Player 3: (C / D) -> (0 / 1)
+     [ 3., 3.]],  # Player 1: C, Player 2: D, Player 3: (C / D) -> (0 / 0)
+    
+    [[ 2., 2.],   # Player 1: D, Player 2: C, Player 3: (C / D) -> (0 / 0)
+     [ 2., 1.]],  # Player 1: D, Player 2: D, Player 3: (C / D) -> (1 / 0)
 ])
 
-# Stag Hunt game
-payoff_values = [4., 3., 2., 1.]  # High, medium, low, lowest payoffs
-stag_hunt_3player = torch.zeros(2, 2, 2)
-stag_hunt_3player[0, 0, 0] = payoff_values[0]  # All cooperate -> high payoff
-stag_hunt_3player[0, 0, 1] = payoff_values[1]  # Player 3 defects
-stag_hunt_3player[0, 1, 0] = payoff_values[1]  # Player 2 defects
-stag_hunt_3player[1, 0, 0] = payoff_values[1]  # Player 1 defects
-stag_hunt_3player[0, 1, 1] = payoff_values[2]  # Players 2 and 3 defect
-stag_hunt_3player[1, 0, 1] = payoff_values[2]  # Players 1 and 3 defect
-stag_hunt_3player[1, 1, 0] = payoff_values[2]  # Players 1 and 2 defect
-stag_hunt_3player[1, 1, 1] = payoff_values[3]  # All defect -> low payoff
+stag_hunt_3player = torch.tensor([     
+    [[ 4., 1.],   # Player 1: C, Player 2: C, Player 3: (C / D) -> (0 / 1)
+     [ 1., 1.]],  # Player 1: C, Player 2: D, Player 3: (C / D) -> (0 / 0)
+    
+    [[ 2., 2.],   # Player 1: D, Player 2: C, Player 3: (C / D) -> (0 / 0)
+     [ 2., 2.]],  # Player 1: D, Player 2: D, Player 3: (C / D) -> (1 / 0)
+])
 
 # ==============================================================================
 # 3 Player, 3 action games
