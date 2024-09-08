@@ -497,38 +497,30 @@ class Agent:
             novelty += torch.dot(
                 self.A[factor_idx] @ s_pred, 
                 W[factor_idx] @ s_pred)
+        if novelty != 0:
+            print(f"Non-zero novelty (factor) for action {u_i}: {novelty}")
         return novelty
-    
+
     def compute_A_joint_novelty(self, u_i, q_s_joint_u, q_o_joint_u_full):
         '''
         Compute the novelty of the joint likelihood model A_joint for action u_i
         '''
-        n_agents = len(self.s)
-        n_actions = self.s[0].shape[0]
+        n_agents = q_s_joint_u.ndim
+        n_actions = q_s_joint_u.shape[0]
 
-        A_joint_posterior = self.A_joint.clone()
+        A_joint_square = self.A_joint.view(n_actions ** n_agents, n_actions ** n_agents)
+        A_joint_posterior_square = A_joint_square.clone()
+        A_joint_posterior_square += torch.outer(q_s_joint_u.flatten(), q_o_joint_u_full.flatten())
 
-        # Function to generate einsum indices using chr()
-        indices_1 = ''.join(chr(97 + i) for i in range(n_agents))  # for q_s_joint_u
-        indices_2 = ''.join(chr(97 + i) for i in range(n_agents, n_agents + n_agents))  # for q_o_joint_u
-        result_indices = indices_1 + indices_2  # concatenated indices
-        einsum_str = f'{indices_1},{indices_2}->{result_indices}'
-
-        # Compute the outer product using the generated einsum string
-        outer_product = torch.einsum(einsum_str, q_s_joint_u, q_o_joint_u_full)  # FIXME: should o_i be u_i?
-        assert outer_product.shape == (n_actions,) * (2 * n_agents), (
-            f"Outer product shape {outer_product.shape} is not correct."
-        )
-        
-        A_joint_posterior += outer_product
-
-        Dirichlet(self.A_joint.flatten()).mean
-
-        return kl_divergence(
-            Dirichlet(A_joint_posterior.flatten()),   # FIXME: Dirichlet or Categorical?
-            Dirichlet(self.A_joint.flatten())
-        )
-
+        novelty = 0
+        # Da Costa et al. (2020; Eq. D.17)
+        W = 0.5 * (1/A_joint_square - 1/A_joint_square.sum(dim=1, keepdim=True))
+        novelty += torch.dot(
+            A_joint_square @ q_s_joint_u.flatten(), 
+            W @ q_s_joint_u.flatten()
+        ) 
+        novelty = novelty / ((n_actions ** n_agents)**2)  # regularize by size of square matrix
+        return novelty
 
     def select_action(self):
         EFE = self.compute_efe()
@@ -708,6 +700,7 @@ class Agent:
             s_history = [self.s] 
             o_history = [o] 
 
+        # Learning -------------------------------------------------------------
         # Create the einsum subscripts string dynamically for n_agents
         # e.g., if n_agents = 3, this will be 'i,j,k->ijk'
         einsum_str = (
@@ -729,6 +722,13 @@ class Agent:
             assert self.A_joint[o_indices].shape == q_s_joint.shape, f"A_joint[o_indices] shape {self.A_joint[o_indices].shape} is not correct."
             
             A_joint_posterior[o_indices] += q_s_joint
+
+            # TODO: Consider using this instead of the current method
+            # A_joint_square = self.A_joint.view(n_actions ** n_agents, n_actions ** n_agents)
+            # A_joint_posterior_square = A_joint_square.clone()
+            # o_joint = torch.einsum(einsum_str, *[o_t[factor_idx] for factor_idx in range(n_agents)])
+            # A_joint_posterior_square += torch.outer(q_s_joint.flatten(), o_joint.flatten())
+            # ... then reshape into (n_actions, ) * (2 * n_agents) and update A_joint_posterior
 
         # Bayesian Model Reduction ---------------------------------------------
         BMR = True
