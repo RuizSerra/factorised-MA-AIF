@@ -168,38 +168,83 @@ division_game_2player = torch.tensor([
 # ==============================================================================
 # 3 Player, 2 action games
 # ==============================================================================
-
+# cf. Harré (2018; Fig. 4) "Multi-agent Economics and the Emergence of Critical Markets"
+T, R, P, S = 4., 3.1, 2., 1.  # R > (T+S)/2  http://gamut.stanford.edu/gamut.pdf
 prisoners_dilemma_3player = torch.tensor([
-    [[ 2., 1.],   # Player 1: C, Player 2: C, Player 3: (C / D) -> (4 / 4)
-     [ 1., 1.]],  # Player 1: C, Player 2: D, Player 3: (C / D) -> (4 / 3)
+    [[ R,  S],   # Player 1: C, Player 2: C, Player 3: (C / D) -> (4 / 4)
+     [ S,  S]],  # Player 1: C, Player 2: D, Player 3: (C / D) -> (4 / 3)
     
-    [[ 4., 4.],   # Player 1: D, Player 2: C, Player 3: (C / D) -> (2 / 1)
-     [ 4., 3.]],  # Player 1: D, Player 2: D, Player 3: (C / D) -> (1 / 1)
+    [[ T,  T],   # Player 1: D, Player 2: C, Player 3: (C / D) -> (2 / 1)
+     [ T,  P]],  # Player 1: D, Player 2: D, Player 3: (C / D) -> (1 / 1)
 ])
 
+T, R, S, P = 4., 3., 2., 1.  
 chicken_3player = torch.tensor([
-    [[ 2.,  2.],  # Player 1: C, Player 2: C, Player 3: (C / D) -> (0 / 0)
-     [ 2.,  2.]], # Player 1: C, Player 2: D, Player 3: (C / D) -> (0 / 0)
+    [[ R,  S],  # Player 1: C, Player 2: C, Player 3: (C / D) -> (0 / 0)
+     [ S,  S]], # Player 1: C, Player 2: D, Player 3: (C / D) -> (0 / 0)
     
-    [[ 4.,  1.],  # Player 1: D, Player 2: C, Player 3: (C / D) -> (-1 / 1)
-     [ 1.,  1.]], # Player 1: D, Player 2: D, Player 3: (C / D) -> (1 / 1)
+    [[ T,  P],  # Player 1: D, Player 2: C, Player 3: (C / D) -> (-1 / 1)
+     [ P,  P]], # Player 1: D, Player 2: D, Player 3: (C / D) -> (1 / 1)
 ])
 
+R, T, S, P = 4., 2., 2., 1.
 harmony_3player = torch.tensor([     
-    [[ 4., 3.],   # Player 1: C, Player 2: C, Player 3: (C / D) -> (0 / 1)
-     [ 3., 3.]],  # Player 1: C, Player 2: D, Player 3: (C / D) -> (0 / 0)
+    [[ R,  S],   # Player 1: C, Player 2: C, Player 3: (C / D) -> (0 / 1)
+     [ S,  S]],  # Player 1: C, Player 2: D, Player 3: (C / D) -> (0 / 0)
     
-    [[ 2., 2.],   # Player 1: D, Player 2: C, Player 3: (C / D) -> (0 / 0)
-     [ 2., 1.]],  # Player 1: D, Player 2: D, Player 3: (C / D) -> (1 / 0)
+    [[ T,  T],   # Player 1: D, Player 2: C, Player 3: (C / D) -> (0 / 0)
+     [ T,  P]],  # Player 1: D, Player 2: D, Player 3: (C / D) -> (1 / 0)
 ])
 
-stag_hunt_3player = torch.tensor([     
-    [[ 4., 1.],   # Player 1: C, Player 2: C, Player 3: (C / D) -> (0 / 1)
-     [ 1., 1.]],  # Player 1: C, Player 2: D, Player 3: (C / D) -> (0 / 0)
-    
-    [[ 2., 2.],   # Player 1: D, Player 2: C, Player 3: (C / D) -> (0 / 0)
-     [ 2., 2.]],  # Player 1: D, Player 2: D, Player 3: (C / D) -> (1 / 0)
+R, T, P, S = 4., 3., 2., 1.
+stag_hunt_3player_M3 = torch.tensor([  # M3: 3 players required to hunt a stag
+    [[ R,  S],   # Player 1: C, Player 2: C, Player 3: (C / D) -> (R / S)
+     [ S,  S]],  # Player 1: C, Player 2: D, Player 3: (C / D) -> (S / S)
+
+    [[ P,  P],   # Player 1: D, Player 2: C, Player 3: (C / D) -> (P / P)
+     [ P,  P]],  # Player 1: D, Player 2: D, Player 3: (C / D) -> (P / P)
 ])
+
+stag_hunt_3player_M2 = torch.tensor([  # M2: 2 players required to hunt a stag
+    [[ R,  R],   # Player 1: C, Player 2: C, Player 3: (C / D) -> (R / S)
+     [ R,  S]],  # Player 1: C, Player 2: D, Player 3: (C / D) -> (S / S)
+
+    [[ P,  P],   # Player 1: D, Player 2: C, Player 3: (C / D) -> (P / P)
+     [ P,  P]],  # Player 1: D, Player 2: D, Player 3: (C / D) -> (P / P)
+])
+
+R, P, T, S = 4., 3., 2., 1.
+coordination_3player = torch.tensor([
+    [[ R,  S],   # Player 1: C, Player 2: C, Player 3: (C / D) -> (R / S)
+     [ S,  S]],  # Player 1: C, Player 2: D, Player 3: (C / D) -> (S / S)
+
+    [[ T,  P],   # Player 1: D, Player 2: C, Player 3: (C / D) -> (T / P)
+     [ P,  P]],  # Player 1: D, Player 2: D, Player 3: (C / D) -> (P / P)
+])
+
+T, S, R, P = 4., 3., 2., 1.
+leader_3player = torch.tensor([
+    [[ R,  S],   # Player 1: C, Player 2: C, Player 3: (C / D) -> (R / S)
+     [ S,  S]],  # Player 1: C, Player 2: D, Player 3: (C / D) -> (S / S)
+
+    [[ T,  P],   # Player 1: D, Player 2: C, Player 3: (C / D) -> (T / P)
+     [ P,  T]],  # Player 1: D, Player 2: D, Player 3: (C / D) -> (P / P)
+])
+
+
+# # ALTERNATIVE STAG HUNT
+# # Adapted from N-player Stag Hunt (Luo et al., 2021)
+# a = 4.  # Payoff for hunting a stag
+# r = 2.  # Payoff for hunting a rabbit
+# M = 2   # Number of players required to hunt a stag
+# stag_hunt_3player = torch.zeros(2, 2, 2)
+# for joint_action in torch.cartesian_prod(*(torch.arange(2), ) * 3):
+#     if joint_action[0] == 1:  # Ego defects (hunts a rabbit)
+#         stag_hunt_3player[joint_action] = r
+#     elif joint_action.sum() <= (3 - M):  # Ego cooperates, and there are enough stag hunters (incl. ego)
+#         stag_hunt_3player[joint_action] = a
+#     else:  # Ego cooperates, but not enough stag hunters
+#         stag_hunt_3player[joint_action] = 1.
 
 # ==============================================================================
 # 3 Player, 3 action games
