@@ -105,8 +105,8 @@ hawk_dove_2player += EPSILON
 import torch
 
 # Define the parameters for the attachment game
-v = 1  # Value (comfort) if the child goes to the mother and the mother attends
-s = 1  # Stress if the child goes to the mother and is ignored
+v = 1.  # Value (comfort) if the child goes to the mother and the mother attends
+s = 1.  # Stress if the child goes to the mother and is ignored
 c = 0.5  # Cost for the mother attending to the child
 
 # Compute the payoffs
