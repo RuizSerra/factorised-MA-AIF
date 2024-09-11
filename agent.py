@@ -560,7 +560,6 @@ class Agent:
     # =======================================
     
     def learn(self):
-
         # Convert history to tensors
         self.s_history = torch.stack(self.s_history)  # Shape: (T, n_agents, n_actions)
         self.o_history = torch.stack(self.o_history)  # Shape: (T, n_agents, n_actions)
