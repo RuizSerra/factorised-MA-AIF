@@ -17,6 +17,10 @@ torch.set_printoptions(precision=2)
 PROPRIOCEPTION = False
 JOINT_AMBIGUITY = False
 NOVELTY = False
+LEARN_A = True
+LEARN_A_JOINT = True
+LEARN_B = True
+BETA_0 = 1.0
 
 class Agent:
 
@@ -28,7 +32,7 @@ class Agent:
         self.id = id
         
         # Learning parameters
-        self.beta_0 = 1.0  # beta in Gamma distribution (stays fixed)
+        self.beta_0 = BETA_0  # beta in Gamma distribution (stays fixed)
         self.beta_1 = beta_1  # alpha in Gamma distribution (sets the prior precision mean)
         self.gamma = self.beta_1 / self.beta_0 #Current precision
         self.dynamic_precision = dynamic_precision  # Enables precision updating
@@ -562,9 +566,12 @@ class Agent:
         self.o_history = torch.stack(self.o_history)  # Shape: (T, n_agents, n_actions)
         self.u_history = torch.tensor(self.u_history)  # Shape: (T, )
     
-        self.learn_A()
-        self.learn_A_joint()
-        # self.learn_B()
+        if LEARN_A:
+            self.learn_A()
+        if LEARN_A_JOINT:
+            self.learn_A_joint()
+        if LEARN_B:
+            self.learn_B()
 
         # Reset history
         self.s_history = []
