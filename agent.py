@@ -14,7 +14,7 @@ from torch.distributions.kl import kl_divergence
 
 torch.set_printoptions(precision=2)
 
-PROPRIOCEPTION = False
+INTEROCEPTION = False
 NOVELTY = False
 LEARN_A = True
 LEARN_A_JOINT = True
@@ -183,9 +183,9 @@ class Agent:
         Returns:
             s (torch.Tensor): Hidden state tensor of shape (n_agents, n_actions)
         '''
-        # if PROPRIOCEPTION:
+        # if INTEROCEPTION:
         #     '''
-        #     If proprioception is enabled, ego can perceive the true hidden state for the ego factor, 
+        #     If interoception is enabled, ego can perceive the true hidden state for the ego factor, 
         #     i.e. q(s_i) = q(u_i)
         #     and will have to infer the hidden states of the other agents ("theory of mind")
         #     '''
