@@ -339,8 +339,7 @@ class Agent:
 
             # Novelty ----------------------------------------------------------
             if NOVELTY:  # TODO
-                raise NotImplementedError("Novelty term not implemented yet")
-                novelty[u_i_hat] += self.compute_A_novelty(u_i_hat)
+                novelty[u_i_hat] += self.compute_A_novelty(u_i_hat)  # TODO: some sort of regularisation, novelty can be really large
 
         EFE = ambiguity + risk - novelty
         assert not torch.any(torch.isnan(EFE)), f"EFE has NaN: {EFE}"
@@ -357,20 +356,18 @@ class Agent:
         
         return EFE
     
-    def compute_A_novelty(self, A_params, q_s_u):
+    def compute_A_novelty(self, u_i):
         '''
         Compute the novelty of the likelihood model A for action u_i
         '''
         novelty = 0
         # Da Costa et al. (2020; Eq. D.17)
-        W = 0.5 * (1/A_params - 1/A_params.sum(dim=1, keepdim=True))
-        for factor_idx in range(q_s_u):  # TODO
-            s_pred = self.q_s_u[u_i, factor_idx]
+        W = 0.5 * (1/self.A_params - 1/self.A_params.sum(dim=1, keepdim=True))
+        for factor_idx in range(self.num_agents):
+            s_pred = self.q_s_u[factor_idx, u_i]
             novelty += torch.dot(
                 self.A[factor_idx] @ s_pred, 
                 W[factor_idx] @ s_pred)
-        if novelty != 0:
-            print(f"Non-zero novelty (factor) for action {u_i}: {novelty}")
         return novelty
 
     def select_action(self):
@@ -438,13 +435,7 @@ class Agent:
         # Bayesian Model Reduction ---------------------------------------------
         BMR = True
         if BMR:
-            shrinkage = self.decay
-            mixture = 0.8
-            # assert 0 < shrinkage < 1, "Shrinkage parameter must be in [0, 1]"
-            # A_reduced_params = shrinkage * self.A_params 
-            # assert shrinkage >= 1, "Shrinkage parameter must be greater than 1"
-            # A_reduced_params = torch.softmax(shrinkage * self.A_params, dim=-2)
-            # A_reduced_params = self.A_params ** (1/shrinkage)
+            mixture = self.decay
 
             A_identity = torch.stack([
                 torch.eye(self.num_actions)
