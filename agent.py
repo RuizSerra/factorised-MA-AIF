@@ -23,7 +23,7 @@ EPSILON = torch.finfo().eps
 
 class Agent:
 
-    def __init__(self, id=None, game_matrix=None, beta_1=1, decay=0.99, dynamic_precision=False):
+    def __init__(self, id=None, game_matrix=None, beta_1=10., decay=0.5, dynamic_precision=False):
 
         self.id = id
         
