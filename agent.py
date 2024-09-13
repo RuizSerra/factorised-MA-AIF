@@ -19,6 +19,7 @@ NOVELTY = False
 LEARN_A = True
 LEARN_B = True
 BETA_0 = 1.0
+EPSILON = torch.finfo().eps
 
 class Agent:
 
@@ -42,7 +43,7 @@ class Agent:
         self.theta = [torch.ones(num_actions) for _ in range(num_agents)]  # Dirichlet state prior
         
         self.A_params = torch.ones((num_agents, num_actions, num_actions))  # Uniform observation model prior
-        # self.A_params = torch.stack([torch.eye(num_actions) for _ in range(num_agents)]) + 1e-9  # Identity observation model prior
+        # self.A_params = torch.stack([torch.eye(num_actions) for _ in range(num_agents)]) + EPSILON  # Identity observation model prior
         self.A = self.A_params / self.A_params.sum(dim=1, keepdim=True)
 
         # self.B_params = torch.ones((num_agents, num_actions, num_actions, num_actions))
@@ -210,8 +211,8 @@ class Agent:
         for factor_idx in factors:
             s_prev = self.s[factor_idx].clone().detach()  # State t-1
             assert torch.allclose(s_prev.sum(), torch.tensor(1.0)), "s_prev tensor does not sum to 1."
-            log_prior = torch.log(self.B[factor_idx, self.u] @ s_prev + 1e-9)  # New prior is old posterior
-            log_likelihood = torch.log(self.A[factor_idx].T @ o[factor_idx] + 1e-9)  # Probability of observation given hidden states
+            log_prior = torch.log(self.B[factor_idx, self.u] @ s_prev + EPSILON)  # New prior is old posterior
+            log_likelihood = torch.log(self.A[factor_idx].T @ o[factor_idx] + EPSILON)  # Probability of observation given hidden states
 
             variational_params = self.theta[factor_idx].clone().detach().requires_grad_(True)  # Variational Dirichlet distribution for each factor (agent)
             optimizer = torch.optim.Adam([variational_params], lr=learning_rate)
@@ -220,7 +221,7 @@ class Agent:
                 optimizer.zero_grad()
 
                 s_samples = Dirichlet(variational_params).rsample((num_samples,))  # Variational dist samples
-                log_s = torch.log(s_samples + 1e-9)  # Log variational dist samples
+                log_s = torch.log(s_samples + EPSILON)  # Log variational dist samples
                 vfe_samples = torch.sum(s_samples * (log_s - log_likelihood - log_prior), dim=-1) 
                 VFE = vfe_samples.mean()
 
@@ -297,7 +298,7 @@ class Agent:
             for factor_idx in range(self.num_agents):
 
                 # Expected ambiguity term (per factor) -------------------------
-                H = -torch.diag(self.A[factor_idx] @ torch.log(self.A[factor_idx] + 1e-9))  # Conditional (pseudo?) entropy (of the generated emissions matrix)
+                H = -torch.diag(self.A[factor_idx] @ torch.log(self.A[factor_idx] + EPSILON))  # Conditional (pseudo?) entropy (of the generated emissions matrix)
                 assert H.ndimension() == 1, "H is not a 1-dimensional tensor"
 
                 s_pred = self.q_s_u[factor_idx, u_i_hat]  # shape (2, )
@@ -305,8 +306,8 @@ class Agent:
                 
                 ambiguity[u_i_hat] += (H @ s_pred) # Ambiguity is conditional entropy of emissions
                 # FIXME: not sure if these definitions are correct
-                # risk[u_i] += (o_pred @ (torch.log(o_pred + 1e-9)))  - (o_pred @ log_C_modality) # Risk is negative posterior predictive entropy minus pragmatic value
-                # salience[u_i] += -(o_pred @ (torch.log(o_pred + 1e-9)))  - (H @ s_pred) # Salience is negative posterior predictive entropy minus ambiguity (0)
+                # risk[u_i] += (o_pred @ (torch.log(o_pred + EPSILON)))  - (o_pred @ log_C_modality) # Risk is negative posterior predictive entropy minus pragmatic value
+                # salience[u_i] += -(o_pred @ (torch.log(o_pred + EPSILON)))  - (H @ s_pred) # Salience is negative posterior predictive entropy minus ambiguity (0)
                 # pragmatic_value[u_i] += (o_pred @ log_C_modality) # Pragmatic value is negative cross-entropy
 
             # Joint predictive observation posterior ---------------------------
@@ -332,7 +333,7 @@ class Agent:
             # Risk term (joint) ------------------------------------------------
             # i.e. KL[q(o|u) || p*(o)]
             risk[u_i_hat] = torch.tensordot(
-                (torch.log(q_o_joint_u + 1e-9) - self.log_C),
+                (torch.log(q_o_joint_u + EPSILON) - self.log_C),
                 q_o_joint_u,
                 dims=3
             )
