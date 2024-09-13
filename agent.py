@@ -338,7 +338,7 @@ class Agent:
             )
 
             # Novelty ----------------------------------------------------------
-            if NOVELTY:  # TODO
+            if NOVELTY:
                 novelty[u_i_hat] += self.compute_A_novelty(u_i_hat)  # TODO: some sort of regularisation, novelty can be really large
 
         EFE = ambiguity + risk - novelty
