@@ -12,28 +12,38 @@ import torch.nn.functional as F
 from torch.distributions.dirichlet import Dirichlet
 from torch.distributions.kl import kl_divergence
 
+# import os
+# os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'
+# PYTORCH_ENABLE_MPS_FALLBACK = 1 
+# if torch.backends.mps.is_available():
+#     device = torch.device("mps")
+# elif torch.cuda.is_available():
+#     device = torch.device("cuda")
+# else:
+#     device = torch.device("cpu")
+# torch.set_default_device(device)
 torch.set_printoptions(precision=2)
 
-INTEROCEPTION = False
-NOVELTY = False
-LEARN_A = True
-LEARN_B = True
-BETA_0 = 1.0
 EPSILON = torch.finfo().eps
 
 class Agent:
 
-    def __init__(self, id=None, game_matrix=None, beta_1=10., decay=0.5, dynamic_precision=False):
+    def __init__(
+            self, 
+            id=None, 
+            game_matrix=None, 
+            beta_0=1.,
+            beta_1=10., 
+            decay=0.5, 
+            dynamic_precision=False,
+            interoception=False,
+            A_learning=True,
+            B_learning=True,
+            compute_novelty=False,
+        ):
 
         self.id = id
         
-        # Learning parameters --------------------------------------------------
-        self.beta_0 = BETA_0  # beta in Gamma distribution (stays fixed)
-        self.beta_1 = beta_1  # alpha in Gamma distribution (sets the prior precision mean)
-        self.gamma = self.beta_1 / self.beta_0 #Current precision
-        self.dynamic_precision = dynamic_precision  # Enables precision updating
-        self.decay = decay  # Forgetting rate for learning
-
         # Generative model hyperparameters -------------------------------------
         self.game_matrix = game_matrix.to(torch.float)  # Rewards from row player's perspective (force to float)
         self.num_actions = num_actions = game_matrix.shape[0]  # Number of actions (assuming symmetrical actions)
@@ -54,9 +64,20 @@ class Agent:
         ]).reshape(num_agents, num_actions, num_actions, num_actions)
         self.B = self.B_params / self.B_params.sum(dim=2, keepdim=True)
 
-        self.log_C = game_matrix.to(torch.float)  # Payoffs for joint actions (in matrix form, from row player's perspective) (force to float)
+        self.log_C = game_matrix.to(torch.float) # Payoffs for joint actions (in matrix form, from row player's perspective) (force to float)
         self.s = torch.stack([Dirichlet(theta).mean for theta in self.theta])  # Categorical state prior (D)
         self.E = torch.ones(num_actions) / num_actions  # Habits 
+        
+        # Learning parameters --------------------------------------------------
+        self.beta_0 = beta_0  # beta in Gamma distribution (stays fixed)
+        self.beta_1 = beta_1  # alpha in Gamma distribution (sets the prior precision mean)
+        self.gamma = self.beta_1 / self.beta_0 #Current precision
+        self.dynamic_precision = dynamic_precision  # Enables precision updating
+        self.decay = decay  # Forgetting rate for learning
+        self.interoception = interoception  # Ego can perceive its own hidden state
+        self.A_learning = A_learning  # Learn the observation model
+        self.B_learning = B_learning  # Learn the transition model
+        self.compute_novelty = compute_novelty
 
         # Store blanket states history for learning ----------------------------
         self.o_history = []  # Observations (opponent actions) history
@@ -183,7 +204,7 @@ class Agent:
         Returns:
             s (torch.Tensor): Hidden state tensor of shape (n_agents, n_actions)
         '''
-        if INTEROCEPTION:
+        if self.interoception:
             '''
             If proprioception is enabled, ego can perceive the true hidden state for the ego factor, 
             i.e. q(s_i) = q(u_i)
@@ -339,8 +360,9 @@ class Agent:
             )
 
             # Novelty ----------------------------------------------------------
-            if NOVELTY:
+            if self.compute_novelty:
                 novelty[u_i_hat] += self.compute_A_novelty(u_i_hat)  # TODO: some sort of regularisation, novelty can be really large
+                # TODO: B novelty?
 
         EFE = ambiguity + risk - novelty
         assert not torch.any(torch.isnan(EFE)), f"EFE has NaN: {EFE}"
@@ -409,9 +431,9 @@ class Agent:
         self.o_history = torch.stack(self.o_history)  # Shape: (T, n_agents, n_actions)
         self.u_history = torch.tensor(self.u_history)  # Shape: (T, )
     
-        if LEARN_A:
+        if self.A_learning:
             self.learn_A()
-        if LEARN_B:
+        if self.B_learning:
             self.learn_B()
 
         # Reset history
