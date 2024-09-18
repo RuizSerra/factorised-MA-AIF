@@ -12,7 +12,7 @@ import torch
 # Add a small CONSTANT to avoid log(0) issues
 CONSTANT = 1
 NEG_CONSTANT = -5
-EPSILON = 1e-09
+EPSILON = torch.finfo(torch.float32).eps
 EPSILON = 1
 
 # ==============================================================================
@@ -101,8 +101,7 @@ hawk_dove_2player += EPSILON
 
 
 
-#Attachment game (Buono et al)
-import torch
+# Attachment game (Buono et al)
 
 # Define the parameters for the attachment game
 v = 1.  # Value (comfort) if the child goes to the mother and the mother attends
@@ -218,11 +217,11 @@ prisoners_dilemma_3player = torch.tensor([
 
 T, R, S, P = 4., 3., 2., 1.  
 chicken_3player = torch.tensor([
-    [[ R,  S],  # Player 1: C, Player 2: C, Player 3: (C / D) -> (0 / 0)
-     [ S,  S]], # Player 1: C, Player 2: D, Player 3: (C / D) -> (0 / 0)
+    [[ R,  S],  # Player 1: C, Player 2: C, Player 3: (C / D) -> (R / S)
+     [ S,  S]], # Player 1: C, Player 2: D, Player 3: (C / D) -> (S / S)
     
-    [[ T,  P],  # Player 1: D, Player 2: C, Player 3: (C / D) -> (-1 / 1)
-     [ P,  P]], # Player 1: D, Player 2: D, Player 3: (C / D) -> (1 / 1)
+    [[ T,  P],  # Player 1: D, Player 2: C, Player 3: (C / D) -> (T / P)
+     [ P,  P]], # Player 1: D, Player 2: D, Player 3: (C / D) -> (P / P)
 ])
 
 R, T, S, P = 4., 2., 2., 1.
@@ -244,8 +243,8 @@ stag_hunt_3player_M3 = torch.tensor([  # M3: 3 players required to hunt a stag
 ])
 
 stag_hunt_3player_M2 = torch.tensor([  # M2: 2 players required to hunt a stag
-    [[ R,  R],   # Player 1: C, Player 2: C, Player 3: (C / D) -> (R / S)
-     [ R,  S]],  # Player 1: C, Player 2: D, Player 3: (C / D) -> (S / S)
+    [[ R,  R],   # Player 1: C, Player 2: C, Player 3: (C / D) -> (R / R)
+     [ R,  S]],  # Player 1: C, Player 2: D, Player 3: (C / D) -> (R / S)
 
     [[ P,  P],   # Player 1: D, Player 2: C, Player 3: (C / D) -> (P / P)
      [ P,  P]],  # Player 1: D, Player 2: D, Player 3: (C / D) -> (P / P)
