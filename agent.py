@@ -36,6 +36,7 @@ class Agent:
             beta_1=10., 
             decay=0.5, 
             dynamic_precision=False,
+            deterministic_actions=False,
             interoception=False,
             A_learning=True,
             B_learning=True,
@@ -71,7 +72,7 @@ class Agent:
         # Learning parameters --------------------------------------------------
         self.beta_0 = beta_0  # beta in Gamma distribution (stays fixed)
         self.beta_1 = beta_1  # alpha in Gamma distribution (sets the prior precision mean)
-        self.gamma = self.beta_1 / self.beta_0 #Current precision
+        self.gamma = self.beta_1 / self.beta_0 # Current precision
         self.dynamic_precision = dynamic_precision  # Enables precision updating
         self.decay = decay  # Forgetting rate for learning
         self.interoception = interoception  # Ego can perceive its own hidden state
@@ -86,6 +87,7 @@ class Agent:
         
         # Agents values (change at each time step) -----------------------------
         self.u = torch.multinomial(self.E, 1).item()  # Starting action randomly sampled according to habits
+        self.deterministic_actions = deterministic_actions
 
         self.VFE = [None] * num_agents  # Variational Free Energy for each agent (state factor)
         self.accuracy = [None] * num_agents
@@ -404,7 +406,7 @@ class Agent:
         )
         self.q_u = q_u
 
-        self.u = torch.multinomial(q_u, 1).item()
+        self.u = torch.multinomial(q_u, 1).item() if not self.deterministic_actions else torch.argmax(q_u).item()
         self.u_history.append(self.u)
 
         if self.dynamic_precision:
