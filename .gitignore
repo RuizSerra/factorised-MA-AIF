@@ -1,3 +1,8 @@
+
+# Run results
+results/*.pkl
+
+# MacOS system files
 .DS_Store
 
 # Byte-compiled / optimized / DLL files
