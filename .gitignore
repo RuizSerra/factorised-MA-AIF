@@ -1,6 +1,7 @@
 
 # Run results
-results/*.pkl
+*.pkl
+*.db
 
 # MacOS system files
 .DS_Store
