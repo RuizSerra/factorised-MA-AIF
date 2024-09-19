@@ -358,7 +358,7 @@ class Agent:
             risk[u_i_hat] = torch.tensordot(
                 (torch.log(q_o_joint_u + EPSILON) - self.log_C),
                 q_o_joint_u,
-                dims=3
+                dims=self.num_agents
             )
 
             # Novelty ----------------------------------------------------------
