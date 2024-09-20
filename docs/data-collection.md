@@ -2,20 +2,23 @@
 
 # Data Collection
 
-When running experiments using the `IteratedGame` class in `simulation.py`, the variables that will be collected each timestep are specified in the `collect_variables` list argument passed to `IteratedGame.run()`. This can include any agent attributes, for example `agent.q_u`, or `agent.gamma`, or `agent.dynamic_precision`.
+When running experiments using the `simulation.IteratedGame` class, the method `IteratedGame.run()` takes a(n optional) `collect_variables` list of the names of agent attributes to be collected each timestep. 
+This can include any agent attributes, for example `agent.q_u`, or `agent.gamma`, or `agent.dynamic_precision`.
+The `IteratedGame` class will collect these variables for each agent at each timestep, and store them in a dictionary. The dictionary is returned by the `IteratedGame.run()` method. 
+Generally here we specify variables (attributes) that change every time step.
 
-The `IteratedGame` class will collect these variables for each agent at each timestep, and store them in a dictionary. The dictionary is returned by the `IteratedGame.run()` method.
-
-The function `simulate()` in `simulation.py` is a wrapper that allows one to run `IteratedGame.run()` multiple times with different seeds and collect the results in a list of dictionaries. If a database path is provided, the results will be stored in the database. The results are stored in two differnent tables:
+The function `simulation.simulate()` is a wrapper that allows one to run `IteratedGame.run()` multiple times with different seeds and collect the results in a list of dictionaries. 
+If a database path is provided, the results will be stored in the database. 
+The results are stored in two differnent tables:
 
 ### Metadata Table
 
-This table contains the metadata for each run, including the seed, the parameters of the run, and the final state of the agents.
+This table contains the metadata for each run, including the seed, the parameters of the run, and the initial state of the agents.
 - `commit_sha` (string) the commit hash of the code used to run the experiment (short version, i.e. 8 characters)
 - `timestamp` (string) in `YYYYMMDD-HHMMSS` format
-- `description`: (optional) experiment description string, provided by the user
-- `agent_kwargs`: initial agent configurations (a pickled dictionary)
-- `game_transitions`: specified game transitions, including game label, payoff matrix, and duration of the game (a pickled tuple)
+- `description`: (string; optional) experiment description string, provided by the user
+- `agent_kwargs`: (pickled dictionary) initial agent configuration parameters
+- `game_transitions`: (pickled tuple) specified game transitions, including game label, payoff matrix, and duration of the game
 
 Example of the `metadata` table:
 
@@ -50,3 +53,6 @@ experiments = data_utils.retrieve_timeseries_matching(sql_query=sql_query, db_pa
 experiments  # <--- this will show the timeseries data for the selected experiments
 ```
 
+## Interface
+
+The `notebooks/data_utils.py` module provides functions to interact with the database.
