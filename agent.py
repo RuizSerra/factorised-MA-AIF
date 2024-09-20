@@ -41,7 +41,7 @@ class Agent:
             compute_novelty:bool=False,
             deterministic_actions:bool=False,
             # Precision
-            dynamic_precision:bool=False,  
+            dynamic_precision:bool=True,  
             beta_0:float=1.,
             beta_1:float=10.,
             # Learning
@@ -97,18 +97,18 @@ class Agent:
         self.E = torch.ones(num_actions) / num_actions  # Habits 
         
         # Learning parameters --------------------------------------------------
+        self.dynamic_precision = dynamic_precision  # Enables precision updating
         self.beta_0 = beta_0  # beta in Gamma distribution (stays fixed)
         self.beta_1 = beta_1  # alpha in Gamma distribution (sets the prior precision mean)
         self.gamma = self.beta_1 / self.beta_0 # Current precision
-        self.dynamic_precision = dynamic_precision  # Enables precision updating
-        self.decay = decay  # Forgetting rate for learning
         self.interoception = interoception  # Ego can perceive its own hidden state
         self.inference_num_iterations = inference_num_iterations
         self.inference_num_samples = inference_num_samples
         self.inference_learning_rate = inference_learning_rate
+        self.learn_every_t_steps = learn_every_t_steps  # Learn every t steps
         self.A_learning = A_learning  # Learn the observation model
         self.B_learning = B_learning  # Learn the transition model
-        self.learn_every_t_steps = learn_every_t_steps  # Learn every t steps
+        self.decay = decay  # Forgetting rate for learning
         self.compute_novelty = compute_novelty
 
         # Store blanket states history for learning ----------------------------
