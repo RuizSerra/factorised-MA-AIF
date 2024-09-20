@@ -32,7 +32,6 @@ Example of the `timeseries` table (not showing all columns):
 
 ![Timeseries table](db-timeseries-table.png)
 
-
 ## Examples
 
 To select experiments by `description`, first we need to retrieve the matching `commit_sha` and `timestamp` from the `metadata` table. Then we can use these values to filter the `experiments` table. Example:
