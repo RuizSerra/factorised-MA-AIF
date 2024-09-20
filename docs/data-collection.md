@@ -30,3 +30,23 @@ Example of the `timeseries` table (not showing all columns):
 ![Timeseries table](db-timeseries-table.png)
 
 
+## Examples
+
+To select experiments by `description`, first we need to retrieve the matching `commit_sha` and `timestamp` from the `metadata` table. Then we can use these values to filter the `experiments` table. Example:
+
+```python
+timestamp_query = '20240920-12'
+sql_query = f"SELECT * FROM metadata WHERE timestamp LIKE '%{timestamp_query}%' AND description LIKE '%2x2 no interoception%'"
+metadata = data_utils.retrieve_timeseries_matching(sql_query=sql_query, db_path=RESULTS_DB_PATH)
+
+commit_sha = metadata.iloc[0]['commit_sha']
+timestamp = metadata.iloc[0]['timestamp']
+
+metadata  # <--- this will show the metadata for the selected experiments
+
+sql_query = f"SELECT * FROM timeseries WHERE timestamp LIKE '%{timestamp}%' AND commit_sha LIKE '%{commit_sha}%'"
+experiments = data_utils.retrieve_timeseries_matching(sql_query=sql_query, db_path=RESULTS_DB_PATH)
+
+experiments  # <--- this will show the timeseries data for the selected experiments
+```
+
