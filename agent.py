@@ -32,16 +32,43 @@ class Agent:
             self, 
             id=None, 
             game_matrix=None, 
-            beta_0=1.,
-            beta_1=10., 
-            decay=0.5, 
-            dynamic_precision=False,
-            deterministic_actions=False,
-            interoception=False,
-            A_learning=True,
-            B_learning=True,
-            compute_novelty=False,
+            # Perception
+            interoception:bool=False,
+            inference_num_iterations:int=10, 
+            inference_num_samples:int=100,
+            inference_learning_rate:float=1e-2,
+            # Planning/action selection
+            compute_novelty:bool=False,
+            deterministic_actions:bool=False,
+            # Precision
+            dynamic_precision:bool=False,  
+            beta_0:float=1.,
+            beta_1:float=10.,
+            # Learning
+            decay:float=0.5,
+            A_learning:bool=True,
+            B_learning:bool=True,
+            learn_every_t_steps:int=6,
         ):
+        '''Initialise an agent with the following parameters
+        
+        Args:
+            - id (int): The identifier of the agent
+            - game_matrix (torch.Tensor): The game matrix (payoffs) of the game
+            - interoception (bool): Whether the agent can perceive its own hidden state
+            - inference_num_iterations (int): The number of variational optimisation iterations
+            - inference_num_samples (int): The number of variational optimisation samples
+            - inference_learning_rate (float): The learning rate for variational optimisation
+            - compute_novelty (bool): Whether to compute novelty
+            - deterministic_actions (bool): Whether the agent takes deterministic actions
+            - dynamic_precision (bool): Whether the agent updates the precision
+            - beta_0 (float): The beta_0 hyperparameter
+            - beta_1 (float): The beta_1 hyperparameter
+            - decay (float): The decay rate
+            - A_learning (bool): Whether the agent learns the observation model
+            - B_learning (bool): Whether the agent learns the transition model
+            - learn_every_t_steps (int): The length of the interval for learning
+        '''
 
         self.id = id
         
@@ -76,8 +103,12 @@ class Agent:
         self.dynamic_precision = dynamic_precision  # Enables precision updating
         self.decay = decay  # Forgetting rate for learning
         self.interoception = interoception  # Ego can perceive its own hidden state
+        self.inference_num_iterations = inference_num_iterations
+        self.inference_num_samples = inference_num_samples
+        self.inference_learning_rate = inference_learning_rate
         self.A_learning = A_learning  # Learn the observation model
         self.B_learning = B_learning  # Learn the transition model
+        self.learn_every_t_steps = learn_every_t_steps  # Learn every t steps
         self.compute_novelty = compute_novelty
 
         # Store blanket states history for learning ----------------------------
@@ -186,7 +217,7 @@ class Agent:
     # Perception 
     # ==========================================================================
 
-    def infer_state(self, o, learning_rate=1e-2, num_iterations=10, num_samples=100):
+    def infer_state(self, o):
         '''
         Infer the hidden state of each agent (factor_idx) (i.e. the probability 
         distribution over actions of each agent) given the observation `o` 
@@ -199,9 +230,6 @@ class Agent:
         Args:
             o (torch.Tensor): Observation tensor of shape (n_agents, n_actions), 
                 i.e. one-hot encoding of actions for each agent
-            learning_rate (float): Learning rate for the optimizer
-            num_iterations (int): Number of iterations to run the optimizer
-            num_samples (int): Number of MC samples to draw from the variational distribution
         
         Returns:
             s (torch.Tensor): Hidden state tensor of shape (n_agents, n_actions)
@@ -238,12 +266,12 @@ class Agent:
             log_likelihood = torch.log(self.A[factor_idx].T @ o[factor_idx] + EPSILON)  # Probability of observation given hidden states
 
             variational_params = self.theta[factor_idx].clone().detach().requires_grad_(True)  # Variational Dirichlet distribution for each factor (agent)
-            optimizer = torch.optim.Adam([variational_params], lr=learning_rate)
+            optimizer = torch.optim.Adam([variational_params], lr=self.inference_learning_rate)
 
-            for _ in range(num_iterations):
+            for _ in range(self.inference_num_iterations):
                 optimizer.zero_grad()
 
-                s_samples = Dirichlet(variational_params).rsample((num_samples,))  # Variational dist samples
+                s_samples = Dirichlet(variational_params).rsample((self.inference_num_samples,))  # Variational dist samples
                 log_s = torch.log(s_samples + EPSILON)  # Log variational dist samples
                 vfe_samples = torch.sum(s_samples * (log_s - log_likelihood - log_prior), dim=-1) 
                 VFE = vfe_samples.mean()
@@ -428,20 +456,24 @@ class Agent:
     # ==========================================================================
 
     def learn(self):
-        # Convert history to tensors
-        self.s_history = torch.stack(self.s_history)  # Shape: (T, n_agents, n_actions)
-        self.o_history = torch.stack(self.o_history)  # Shape: (T, n_agents, n_actions)
-        self.u_history = torch.tensor(self.u_history)  # Shape: (T, )
-    
-        if self.A_learning:
-            self.learn_A()
-        if self.B_learning:
-            self.learn_B()
 
-        # Reset history
-        self.s_history = []
-        self.o_history = []
-        self.u_history = []
+        # Learn every t steps
+        if len(self.u_history) == self.learn_every_t_steps:
+
+            # Convert history to tensors
+            self.s_history = torch.stack(self.s_history)  # Shape: (T, n_agents, n_actions)
+            self.o_history = torch.stack(self.o_history)  # Shape: (T, n_agents, n_actions)
+            self.u_history = torch.tensor(self.u_history)  # Shape: (T, )
+        
+            if self.A_learning:
+                self.learn_A()
+            if self.B_learning:
+                self.learn_B()
+
+            # Reset history
+            self.s_history = []
+            self.o_history = []
+            self.u_history = []
 
     def learn_A(self):
 
