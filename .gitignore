@@ -2,6 +2,7 @@
 # Run results
 *.pkl
 *.db
+nohup.out
 
 # MacOS system files
 .DS_Store
