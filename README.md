@@ -25,3 +25,8 @@ Factorised Active Inference Agents for Multi-Agent Interactions
     - `timeseries_utils.py`: Time series utilities, to get metrics and apply transforms to time series data
     - `analysis.py`: Functions for information-theoretic analysis
 - [`docs/`](./docs/): Documentation and figures
+
+## Multiple runs of experiments
+
+The scripts `notebooks/INFG-generate-data.py` and `notebooks/INFG-plot-data.py` can be used to run multiple experiments and plot the results. 
+The scripts are designed to be run from the command line.
