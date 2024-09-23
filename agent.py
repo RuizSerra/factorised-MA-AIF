@@ -316,6 +316,9 @@ class Agent:
         salience = torch.zeros(self.num_actions)
         pragmatic_value = torch.zeros(self.num_actions)
         novelty = torch.zeros(self.num_actions)
+        ppe_state = torch.zeros(self.num_actions)
+        ppe_obs = torch.zeros(self.num_actions)
+        state_xent = torch.zeros(self.num_actions)
         
         # Predictive state posterior -------------------------------------------
         # (per factor 'f' and per possible action 'u')
@@ -354,12 +357,24 @@ class Agent:
 
                 s_pred = self.q_s_u[factor_idx, u_i_hat]  # shape (2, )
                 assert s_pred.ndimension() == 1, "s_pred is not a 1-dimensional tensor"
+                assert torch.allclose(s_pred.sum(), torch.tensor(1.0), atol=1e-6), f"s_pred does not sum to 1: {s_pred.sum().item()}"
+                
+                # print(f's prior: {self.q_s_u[factor_idx, u_i_hat]}')
+                # print(f's_pred posterior: {s_pred}')
                 
                 ambiguity[u_i_hat] += (H @ s_pred) # Ambiguity is conditional entropy of emissions
-                # FIXME: not sure if these definitions are correct
-                # risk[u_i] += (o_pred @ (torch.log(o_pred + EPSILON)))  - (o_pred @ log_C_modality) # Risk is negative posterior predictive entropy minus pragmatic value
-                # salience[u_i] += -(o_pred @ (torch.log(o_pred + EPSILON)))  - (H @ s_pred) # Salience is negative posterior predictive entropy minus ambiguity (0)
-                # pragmatic_value[u_i] += (o_pred @ log_C_modality) # Pragmatic value is negative cross-entropy
+
+                salience[u_i_hat] += torch.sum(s_pred * (torch.log(s_pred + EPSILON) - torch.log(self.q_s_u[factor_idx] + EPSILON)))
+                state_xent[u_i_hat] += -torch.sum(s_pred * torch.log(self.q_s_u[factor_idx] + EPSILON))
+                ppe_state[u_i_hat] += -torch.sum(s_pred * torch.log(s_pred + EPSILON)) #Aka ambiguity the other way
+                salience[u_i_hat] += (-torch.sum(s_pred * torch.log(self.q_s_u[factor_idx] + EPSILON))) - (-torch.sum(s_pred * torch.log(s_pred + EPSILON)))
+
+                # Assert that salience equals state_xent - ppe
+                assert torch.allclose(salience[u_i_hat], state_xent[u_i_hat] - ppe_state[u_i_hat]), \
+                    f"""Assertion failed for action {u_i_hat}:
+                    Salience = {salience[u_i_hat].item()}, 
+                    State Cross-Entropy - PPE = {(state_xent[u_i_hat] - ppe_state[u_i_hat]).item()}"""
+     
 
             # Joint predictive observation posterior ---------------------------
             # q(o_i, o_j, o_k | u_i_hat)
@@ -381,13 +396,56 @@ class Agent:
                 f"q_o_joint_u sum {q_o_joint_u.sum()} != 1.0"
             )
 
+            #Format log_C into a legit probability distribution
+            flattened_C = torch.softmax(self.log_C.flatten(), dim=0)
+            C = flattened_C.view_as(self.log_C)
+            log_C = torch.log(C)
+            assert torch.isclose(torch.exp(log_C).sum(), torch.tensor(1.0), atol=1e-6), "The sum of exponentiated values of log C is not 1."
+
             # Risk term (joint) ------------------------------------------------
             # i.e. KL[q(o|u) || p*(o)]
             risk[u_i_hat] = torch.tensordot(
-                (torch.log(q_o_joint_u + EPSILON) - self.log_C),
+                (torch.log(q_o_joint_u + EPSILON) - log_C), #Updated with probability distribution
                 q_o_joint_u,
                 dims=self.num_agents
             )
+
+            #Pragmatic value term (joint)
+            # i.e. - H(q(o|u, p*(o)))
+            pragmatic_value[u_i_hat] = torch.tensordot(
+                q_o_joint_u,  # Use q(o|u), the posterior
+                log_C,  # log(p(o)), assuming log_C is log of p(o)
+                dims=self.num_agents
+            )
+
+            ppe_obs[u_i_hat] = -torch.tensordot(
+            q_o_joint_u,  # q(o|u), the posterior
+            torch.log(q_o_joint_u + EPSILON),  # log(q(o|u))
+            dims=self.num_agents
+            )
+            
+            print(f'Action: {u_i_hat}')
+            print(f'Pragmatic value: {pragmatic_value[u_i_hat]}')
+            print(f'Salience: {salience[u_i_hat]}')
+            print(f'Risk: {risk[u_i_hat]}')
+            # print(f'PPE Obs: {ppe_obs[u_i_hat]}')
+
+
+            print(f'Ambiguity: {ambiguity[u_i_hat]}')
+          #  print(f'PPE State: {ppe_state[u_i_hat]}')
+           # print(f'State X-Entropy: {state_xent[u_i_hat]}')
+
+
+            pragmatic_plus_salience = pragmatic_value[u_i_hat] + salience[u_i_hat]
+            risk_plus_ambiguity = risk[u_i_hat] + ambiguity[u_i_hat]
+
+            assert torch.allclose(pragmatic_plus_salience, -risk_plus_ambiguity), \
+                f"""Assertion failed for action {u_i_hat}:
+                Pragmatic Value + Salience = {pragmatic_plus_salience.item()}
+                -1 * (Risk + Ambiguity) = {-risk_plus_ambiguity.item()}
+                """
+
+
 
             # Novelty ----------------------------------------------------------
             if self.compute_novelty:
