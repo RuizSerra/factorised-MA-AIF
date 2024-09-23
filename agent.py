@@ -53,6 +53,7 @@ class Agent:
             A_learning:bool=True,
             B_learning:bool=True,
             learn_every_t_steps:int=6,
+            learning_offset:int=0,
             A_BMR:Union[str, NoneType]='identity',
             B_BMR:Union[str, NoneType]='identity',
             E_prior:Union[torch.Tensor, NoneType]=None,
@@ -124,6 +125,8 @@ class Agent:
         self.inference_num_samples = inference_num_samples
         self.inference_learning_rate = inference_learning_rate
         self.learn_every_t_steps = learn_every_t_steps  # Learn every t steps
+        self.learning_offset = learning_offset  # Random offset for learning
+        self.current_random_offset_learning = random.randint(-self.learning_offset, self.learning_offset)  # Random offset for learning
         self.A_learning = A_learning  # Learn the observation model
         self.B_learning = B_learning  # Learn the transition model
         self.A_BMR = A_BMR
@@ -536,13 +539,14 @@ class Agent:
     def learn(self):
 
         # Learn every t steps
-        if len(self.u_history) == self.learn_every_t_steps:
+        if len(self.u_history) == (self.learn_every_t_steps + self.current_random_offset_learning):
 
             # Convert history to tensors
             self.s_history = torch.stack(self.s_history)  # Shape: (T, n_agents, n_actions)
             self.o_history = torch.stack(self.o_history)  # Shape: (T, n_agents, n_actions)
             self.u_history = torch.tensor(self.u_history)  # Shape: (T, )
         
+            # Learn
             if self.A_learning:
                 self.learn_A()
             if self.B_learning:
@@ -552,6 +556,7 @@ class Agent:
             self.s_history = []
             self.o_history = []
             self.u_history = []
+            self.current_random_offset_learning = random.randint(-self.learning_offset, self.learning_offset)  # Renew random offset
 
     def learn_A(self):
 
