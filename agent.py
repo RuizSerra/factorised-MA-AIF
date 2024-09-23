@@ -11,6 +11,8 @@ import numpy as np
 import torch.nn.functional as F
 from torch.distributions.dirichlet import Dirichlet
 from torch.distributions.kl import kl_divergence
+from typing import Union
+from types import NoneType
 
 # import os
 # os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'
@@ -41,14 +43,19 @@ class Agent:
             compute_novelty:bool=False,
             deterministic_actions:bool=False,
             # Precision
-            dynamic_precision:bool=False,  
+            dynamic_precision:bool=True,  
             beta_0:float=1.,
             beta_1:float=10.,
             # Learning
             decay:float=0.5,
+            A_prior_type:str='uniform',
+            B_prior_type:str='identity',
             A_learning:bool=True,
             B_learning:bool=True,
             learn_every_t_steps:int=6,
+            A_BMR:Union[str, NoneType]='identity',
+            B_BMR:Union[str, NoneType]='identity',
+            E_prior:Union[torch.Tensor, NoneType]=None,
         ):
         '''Initialise an agent with the following parameters
         
@@ -65,9 +72,14 @@ class Agent:
             - beta_0 (float): The beta_0 hyperparameter
             - beta_1 (float): The beta_1 hyperparameter
             - decay (float): The decay rate
+            - A_prior_type (str): The type of prior for the observation model. One of ['identity', 'uniform']
+            - B_prior_type (str): The type of prior for the transition model. One of ['identity', 'uniform']
             - A_learning (bool): Whether the agent learns the observation model
             - B_learning (bool): Whether the agent learns the transition model
             - learn_every_t_steps (int): The length of the interval for learning
+            - A_BMR (Union[str, NoneType]): The Bayesian Model Reduction method for the observation model. One of ['identity', 'uniform', None]
+            - B_BMR (Union[str, NoneType]): The Bayesian Model Reduction method for the transition model. One of ['identity', 'uniform', None]
+            - E_prior (Union[torch.Tensor, NoneType]): The prior for the habits
         '''
 
         self.id = id
@@ -80,35 +92,43 @@ class Agent:
         # Generative model parameters ------------------------------------------
         self.theta = [torch.ones(num_actions) for _ in range(num_agents)]  # Dirichlet state prior
         
-        self.A_params = torch.ones((num_agents, num_actions, num_actions))  # Uniform observation model prior
-        # self.A_params = torch.stack([torch.eye(num_actions) for _ in range(num_agents)]) + EPSILON  # Identity observation model prior
+        if A_prior_type == 'identity':
+            self.A_params = torch.stack([torch.eye(num_actions) for _ in range(num_agents)]) + EPSILON  # Identity observation model prior
+        elif A_prior_type == 'uniform':
+            self.A_params = torch.ones((num_agents, num_actions, num_actions))  # Uniform observation model prior
+        else:
+            raise ValueError(f"Invalid A_prior_type: {A_prior_type}")
         self.A = self.A_params / self.A_params.sum(dim=1, keepdim=True)
 
-        # self.B_params = torch.ones((num_agents, num_actions, num_actions, num_actions))
-        self.B_params = torch.stack([
-            torch.eye(num_actions) 
-            for _ in range(num_actions) 
-            for _ in range(num_agents)
-        ]).reshape(num_agents, num_actions, num_actions, num_actions)
+        if B_prior_type == 'identity':
+            self.B_params = torch.stack([
+                torch.eye(num_actions) 
+                for _ in range(num_actions) 
+                for _ in range(num_agents)
+            ]).reshape(num_agents, num_actions, num_actions, num_actions)
+        elif B_prior_type == 'uniform':
+            self.B_params = torch.ones((num_agents, num_actions, num_actions, num_actions))
         self.B = self.B_params / self.B_params.sum(dim=2, keepdim=True)
 
         self.log_C = game_matrix.to(torch.float) # Payoffs for joint actions (in matrix form, from row player's perspective) (force to float)
         self.s = torch.stack([Dirichlet(theta).mean for theta in self.theta])  # Categorical state prior (D)
-        self.E = torch.ones(num_actions) / num_actions  # Habits 
+        self.E = torch.ones(num_actions) / num_actions if E_prior is None else E_prior  # Habits 
         
         # Learning parameters --------------------------------------------------
+        self.dynamic_precision = dynamic_precision  # Enables precision updating
         self.beta_0 = beta_0  # beta in Gamma distribution (stays fixed)
         self.beta_1 = beta_1  # alpha in Gamma distribution (sets the prior precision mean)
         self.gamma = self.beta_1 / self.beta_0 # Current precision
-        self.dynamic_precision = dynamic_precision  # Enables precision updating
-        self.decay = decay  # Forgetting rate for learning
         self.interoception = interoception  # Ego can perceive its own hidden state
         self.inference_num_iterations = inference_num_iterations
         self.inference_num_samples = inference_num_samples
         self.inference_learning_rate = inference_learning_rate
+        self.learn_every_t_steps = learn_every_t_steps  # Learn every t steps
         self.A_learning = A_learning  # Learn the observation model
         self.B_learning = B_learning  # Learn the transition model
-        self.learn_every_t_steps = learn_every_t_steps  # Learn every t steps
+        self.A_BMR = A_BMR
+        self.B_BMR = B_BMR
+        self.decay = decay  # Forgetting rate for learning
         self.compute_novelty = compute_novelty
 
         # Store blanket states history for learning ----------------------------
@@ -547,20 +567,22 @@ class Agent:
         A_posterior_params = self.A_params + delta_params  # Shape: (n_agents, n_actions, n_actions)
 
         # Bayesian Model Reduction ---------------------------------------------
-        BMR = True
-        if BMR:
+        if self.A_BMR:
+
+            if self.A_BMR == 'identity':
+                A_reduced = torch.stack([
+                    torch.eye(self.num_actions)
+                    for _ in range(self.A.shape[0])
+                ]).view(*self.A.shape)
+            elif self.A_BMR == 'uniform':
+                A_reduced = torch.ones_like(self.A_params)
+            else:
+                raise ValueError(f"Invalid A_BMR: {self.A_BMR}")
+
             mixture = self.decay
-
-            A_identity = torch.stack([
-                torch.eye(self.num_actions)
-                for _ in range(self.A.shape[0])
-            ]).view(*self.A.shape)
-
-            A_uniform = torch.ones_like(self.A_params)
-            
             A_reduced_params = (
                 mixture * self.A_params 
-                + (1 - mixture) * A_identity   # TODO: A_identity or A_uniform or...?
+                + (1 - mixture) * A_reduced
             )
 
             # Update model parameters if they reduce the free energy
@@ -610,20 +632,23 @@ class Agent:
             B_posterior_params[:, u_it] = self.B_params[:, u_it] + delta_params
 
         # Bayesian Model Reduction ---------------------------------------------
-        BMR = True
-        if BMR:
+        if self.B_BMR:
+            
+            if self.B_BMR == 'identity':
+                B_reduced = torch.stack([
+                    torch.eye(self.num_actions)
+                    for action_idx in range(self.B.shape[1])
+                    for factor_idx in range(self.B.shape[0])
+                ]).view(*self.B.shape)
+            elif self.B_BMR == 'uniform':
+                B_reduced = torch.ones_like(self.B_params)
+            else:
+                raise ValueError(f"Invalid B_BMR: {self.B_BMR}")
+            
             mixture = self.decay
-            
-            B_identity = torch.stack([
-                torch.eye(self.num_actions)
-                for action_idx in range(self.B.shape[1])
-                for factor_idx in range(self.B.shape[0])
-            ]).view(*self.B.shape)
-            B_uniform = torch.ones_like(self.B_params)
-            
             B_reduced_params = (
                 mixture * self.B_params 
-                + (1 - mixture) * B_identity   # TODO: B_identity or B_uniform or...?
+                + (1 - mixture) * B_reduced
             )
 
             # Update model parameters if they reduce the free energy
