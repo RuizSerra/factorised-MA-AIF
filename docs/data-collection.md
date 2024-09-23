@@ -8,7 +8,7 @@ The `IteratedGame` class will collect these variables for each agent at each tim
 Generally here we specify variables (attributes) that change every time step.
 
 The function `simulation.simulate()` is a wrapper that allows one to run `IteratedGame.run()` multiple times with different seeds and collect the results in a list of dictionaries. 
-If a database path is provided, the results will be stored in the database. 
+If a **database path** is provided, the results will be stored in the database (and the database will be created if it doesn't exist).
 The results are stored in two differnent tables:
 
 ### Metadata Table
@@ -17,6 +17,8 @@ This table contains the metadata for each run, including the seed, the parameter
 - `commit_sha` (string) the commit hash of the code used to run the experiment (short version, i.e. 8 characters)
 - `timestamp` (string) in `YYYYMMDD-HHMMSS` format
 - `description`: (string; optional) experiment description string, provided by the user
+- `num_agents`: (int) number of agents in the experiment
+- `num_actions`: (int) number of actions in the games
 - `agent_kwargs`: (pickled dictionary) initial agent configuration parameters
 - `game_transitions`: (pickled tuple) specified game transitions, including game label, payoff matrix, and duration of the game
 
@@ -33,6 +35,39 @@ Example of the `timeseries` table (not showing all columns):
 ![Timeseries table](db-timeseries-table.png)
 
 ## Examples
+
+Canonical pattern to retrieve data from the database:
+
+```python
+TIMESTAMP = '20240920-123043'
+RESULTS_DB_PATH = 'my-results.db'
+
+print(f'Retrieving data matching {TIMESTAMP} from database {RESULTS_DB_PATH}')
+metadata = database_utils.retrieve_timeseries_matching(
+    db_path=RESULTS_DB_PATH,
+    sql_query=(
+        'SELECT * FROM metadata '
+        f'WHERE timestamp LIKE "%{TIMESTAMP}%" '
+        # 'AND description LIKE "%{DESCRIPTION}%" '
+    )
+)
+game_transitions = pickle.loads(metadata.iloc[0]['game_transitions'])
+agent_kwargs = pickle.loads(metadata.iloc[0]['agent_kwargs'])
+commit_sha = metadata.iloc[0]['commit_sha']
+description = metadata.iloc[0]['description']
+timestamp = metadata.iloc[0]['timestamp']
+num_players = metadata.iloc[0]['num_agents']
+
+experiments = database_utils.retrieve_timeseries_matching(
+    db_path=RESULTS_DB_PATH,
+    sql_query=(
+        'SELECT * FROM timeseries '
+        f'WHERE timestamp LIKE "%{timestamp}%" '
+        f'AND commit_sha LIKE "%{commit_sha}%" '
+    )
+)
+print(f'Found {len(experiments)} matching experiments')
+```
 
 To select experiments by `description`, first we need to retrieve the matching `commit_sha` and `timestamp` from the `metadata` table. Then we can use these values to filter the `experiments` table. Example:
 
