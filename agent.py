@@ -486,27 +486,27 @@ class Agent:
 
         ########### MISC PRINTS FOR CHECKS (can be deleted)
         
-        # Print EFE1 with rounded values
-        print(f'EFE 1: {[round(val.item(), 2) for val in EFE1]}')
-        print(f'Pragmatic value: {[round(val.item(), 2) for val in pragmatic_value]}')
-        print(f'Salience: {[round(val.item(), 2) for val in salience]}')
-        print()
+        # # Print EFE1 with rounded values
+        # print(f'EFE 1: {[round(val.item(), 2) for val in EFE1]}')
+        # print(f'Pragmatic value: {[round(val.item(), 2) for val in pragmatic_value]}')
+        # print(f'Salience: {[round(val.item(), 2) for val in salience]}')
+        # print()
 
-        print(f'Post. Pred Entropy: {[round(val.item(), 2) for val in ppe_obs]}')
-        print()
+        # print(f'Post. Pred Entropy: {[round(val.item(), 2) for val in ppe_obs]}')
+        # print()
 
-        # Print EFE2 with rounded values
-        print(f'EFE 2: {[round(val.item(), 2) for val in EFE2]}')
-        print(f'Risk: {[round(val.item(), 2) for val in risk]}')
-        print(f'Ambiguity: {[round(val.item(), 2) for val in ambiguity]}')
-        print()
+        # # Print EFE2 with rounded values
+        # print(f'EFE 2: {[round(val.item(), 2) for val in EFE2]}')
+        # print(f'Risk: {[round(val.item(), 2) for val in risk]}')
+        # print(f'Ambiguity: {[round(val.item(), 2) for val in ambiguity]}')
+        # print()
 
         # Element-wise percentage difference calculation
         percentage_diff = (torch.abs(EFE1 - EFE2) / ((EFE1 + EFE2) / 2)) * 100
 
         # Compute the mean percentage difference
         avg_percentage_diff = percentage_diff.mean().item()
-        print(f'Diff: {avg_percentage_diff:.1f}%')
+        # print(f'Diff: {avg_percentage_diff:.1f}%')
 
         # Assert that the two tensors are close, and print the average percentage difference if they aren't
         assert torch.allclose(EFE1, EFE2, rtol = TOLERANCE, atol = TOLERANCE), \
