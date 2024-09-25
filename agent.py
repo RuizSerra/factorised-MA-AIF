@@ -116,8 +116,8 @@ class Agent:
 
         self.log_C = game_matrix.to(torch.float) # Payoffs for joint actions (in matrix form, from row player's perspective) (force to float)
         self.s = torch.stack([Dirichlet(theta).mean for theta in self.theta])  # Categorical state prior (D)
-        self.E = torch.ones(num_actions) / num_actions if E_prior is None else E_prior  # Habits 
-        
+        self.E = torch.ones(num_actions**policy_length) / num_actions if E_prior is None else E_prior  # Habits 
+
         # Learning parameters --------------------------------------------------
         self.dynamic_precision = dynamic_precision  # Enables precision updating
         self.beta_0 = beta_0  # beta in Gamma distribution (stays fixed)
@@ -604,7 +604,11 @@ class Agent:
         )
 
         EFE_policies = EFEs.sum(dim=1)
-        q_u = torch.softmax(- self.gamma * EFE_policies, dim=0)  # FIXME: removed log E term for now
+        self.EFE = EFE_policies  # Data collection
+        q_u = torch.softmax(
+            torch.log(self.E) - self.gamma * EFE_policies, 
+            dim=0
+        )
 
         # EFE = self.compute_efe()
         # q_u = torch.softmax(torch.log(self.E) - self.gamma * EFE, dim=0)
