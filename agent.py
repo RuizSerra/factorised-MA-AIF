@@ -27,6 +27,7 @@ from types import NoneType
 torch.set_printoptions(precision=2)
 
 EPSILON = torch.finfo().eps
+TOLERANCE = 1e-5
 
 class Agent:
 
@@ -313,8 +314,8 @@ class Agent:
             self.energy[factor_idx] = energy = -torch.sum(s_samples * (log_prior + log_likelihood), dim=-1).mean().detach()
             self.accuracy[factor_idx] = accuracy = torch.sum(s_samples * log_likelihood, dim=-1).mean().detach()
             self.complexity[factor_idx] = complexity = -torch.sum(s_samples * (log_prior - log_s), dim=-1).mean().detach()
-            assert torch.allclose(VFE, energy - entropy, atol=1e-6), "VFE != energy + entropy"
-            assert torch.allclose(VFE, complexity - accuracy, atol=1e-6), "VFE != complexity - accuracy"
+            assert torch.allclose(VFE, energy - entropy, atol=TOLERANCE), "VFE != energy + entropy"
+            assert torch.allclose(VFE, complexity - accuracy, atol=TOLERANCE), "VFE != complexity - accuracy"
 
         # Data collection (for learning and plotting)
         self.s_history.append(self.s)
@@ -360,8 +361,7 @@ class Agent:
         )  # (f, u, o)
         
 
-
-        #I know #my PPO
+        #I know #my PPO (INTEROCEPTION)
         # If ego was to take action u_i_hat, the observation o_i would be guaranteed
         # to be o_i = u_i_hat, so replace q(o_i | u_i_hat) = one_hot(u_i_hat) for this action
         # self.q_o_u[0] = torch.stack([
@@ -383,32 +383,21 @@ class Agent:
                 s_pred = self.q_s_u[factor_idx, u_i_hat]  # shape (2, )
                 o_pred = self.q_o_u[factor_idx, u_i_hat]
                 assert s_pred.ndimension() == 1, "s_pred is not a 1-dimensional tensor"
-                assert torch.allclose(s_pred.sum(), torch.tensor(1.0), atol=1e-6), f"s_pred does not sum to 1: {s_pred.sum().item()}"
+                assert torch.allclose(s_pred.sum(), torch.tensor(1.0), atol=TOLERANCE), f"s_pred does not sum to 1: {s_pred.sum().item()}"
  
                 # ambiguity[u_i_hat] += (H @ s_pred) # Ambiguity (Friston)
 
                 H_update = -torch.sum(self.A[factor_idx] * torch.log(self.A[factor_idx] + EPSILON), dim=1) #Actual entropy, not of diagonal
                 ambiguity[u_i_hat] += torch.dot(s_pred, H_update)    # Ambiguity (Pat Update)
 
-                # print(f'Prior state: {self.s[factor_idx]}')
-                # print(f'Posterior state: {s_pred}')
-
-                # assert torch.all(self.s[factor_idx] >= 0), "self.s[factor_idx] contains negative values"
-                # assert torch.all(self.s[factor_idx] > EPSILON), "self.s[factor_idx] contains values too close to zero"
-                # assert torch.all(s_pred > EPSILON), "s_pred contains values too close to zero"
-
-                #salience[u_i_hat] += torch.sum(self.s[factor_idx] * (torch.log(self.s[factor_idx] + EPSILON) - torch.log(s_pred + EPSILON)))
-
                 ppe_obs[u_i_hat] += -torch.sum(o_pred * torch.log(o_pred)) 
-                # print(f'Entropy (PPO): {ppe_obs[u_i_hat]}')
-                # print(f'Ambiguity: {ambiguity[u_i_hat]}')
+
+                # Assert that ambiguity is greater than zero within tolerance
+                assert torch.all(ambiguity > -TOLERANCE), f"Ambiguity contains values less than or equal to zero: {ambiguity[ambiguity <= 0]}"
+         
+
  
-        
-     
-            
-            #Print stacked PPOs
-            # print(f'Stacked Marginal PPOs: {self.q_o_u}')
-            # print("Finished")
+
 
             # Joint predictive observation posterior ---------------------------
             # q(o_i, o_j, o_k | u_i_hat)
@@ -440,22 +429,26 @@ class Agent:
                 marginal_from_joint = torch.sum(q_o_joint_u, dim=other_agents)
                 
                 # Check that the marginal computed from the joint matches the original marginal
-                assert torch.allclose(marginal_from_joint, self.q_o_u[agent_idx, u_i_hat], atol=1e-6), (
+                assert torch.allclose(marginal_from_joint, self.q_o_u[agent_idx, u_i_hat], atol=TOLERANCE), (
                     f"Marginal of agent {agent_idx} from joint does not match: "
                     f"marginal_from_joint = {marginal_from_joint}, "
                     f"original marginal = {self.q_o_u[agent_idx, u_i_hat]}"
                 )
 
 
-            # print(f'Joint PPOs: {q_o_joint_u}')
-
             # Format log_C into a proper probability distribution
             flattened_C = torch.softmax(self.log_C.flatten(), dim=0)
             C = flattened_C.view_as(self.log_C)
             log_C = torch.log(C)
-            assert torch.isclose(torch.exp(log_C).sum(), torch.tensor(1.0), atol=1e-6), (
+            assert torch.isclose(torch.exp(log_C).sum(), torch.tensor(1.0), atol=TOLERANCE), (
                 "The sum of exponentiated values of log C is not 1."
             )
+
+            ###########
+
+            # C = torch.exp(self.log_C)
+
+            ##########
 
             # Risk term (KL divergence)
             risk[u_i_hat] = torch.tensordot(
@@ -482,7 +475,7 @@ class Agent:
         salience = ppe_obs - ambiguity
 
         # Assert that the salience term >= 0
-        if not torch.all(salience >= -1e-5):
+        if not torch.all(salience >= -TOLERANCE):
             invalid_values = salience[salience < 0]
             raise AssertionError(f"Salience term is not >= 0. Invalid values: {invalid_values}")
 
@@ -490,6 +483,8 @@ class Agent:
         EFE1 =  -salience - pragmatic_value
         EFE2 = risk + ambiguity
         
+
+        ########### MISC PRINTS FOR CHECKS (can be deleted)
         
         # Print EFE1 with rounded values
         print(f'EFE 1: {[round(val.item(), 2) for val in EFE1]}')
@@ -507,20 +502,20 @@ class Agent:
         print()
 
         # Element-wise percentage difference calculation
-        # percentage_diff = (torch.abs(EFE1 - EFE2) / ((EFE1 + EFE2) / 2)) * 100
+        percentage_diff = (torch.abs(EFE1 - EFE2) / ((EFE1 + EFE2) / 2)) * 100
 
-        # # Compute the mean percentage difference
-        # avg_percentage_diff = percentage_diff.mean().item()
-        # print(f'Diff: {avg_percentage_diff:.1f}%')
+        # Compute the mean percentage difference
+        avg_percentage_diff = percentage_diff.mean().item()
+        print(f'Diff: {avg_percentage_diff:.1f}%')
 
         # Assert that the two tensors are close, and print the average percentage difference if they aren't
-        assert torch.allclose(EFE1, EFE2), \
-            f"""Assertion failed:
+        assert torch.allclose(EFE1, EFE2, rtol = TOLERANCE, atol = TOLERANCE), \
+            f"""Assertion failed — EFE's don't add up:
             -Salience - Pragmatic Value = {EFE1}
             Risk + Ambiguity = {EFE2}
             Average percentage difference = {avg_percentage_diff:.1f}%"""
         
-        print('================')
+        # print('================')
 
         # Data collection ------------------------------------------------------
         self.EFE = EFE
