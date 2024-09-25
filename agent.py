@@ -339,11 +339,9 @@ class Agent:
         salience = torch.zeros(self.num_actions)
         pragmatic_value = torch.zeros(self.num_actions)
         novelty = torch.zeros(self.num_actions)
-        ppe_state = torch.zeros(self.num_actions)
         ppe_obs = torch.zeros(self.num_actions)
-        state_xent = torch.zeros(self.num_actions)
         
-        # Predictive state posterior -------------------------------------------
+        # Posterior predictive state -------------------------------------------
         # (per factor 'f' and per possible action 'u')
         # E_{q(s)}[p(s' | s, u_i_hat)]
         self.q_s_u = torch.einsum(
@@ -352,7 +350,7 @@ class Agent:
             self.s           # (f, k)
         )  # (f, u, n)
 
-        # Predictive observation posterior -------------------------------------
+        # Posterior predictive observation -------------------------------------
         # (per factor 'f' and per possible action 'u')
         # E_{q(s'|u_i_hat)}[p(o | s)]
         self.q_o_u = torch.einsum(
@@ -361,12 +359,16 @@ class Agent:
             self.q_s_u      # (f, u, s)
         )  # (f, u, o)
         
+
+
+        #I know #my PPO
         # If ego was to take action u_i_hat, the observation o_i would be guaranteed
         # to be o_i = u_i_hat, so replace q(o_i | u_i_hat) = one_hot(u_i_hat) for this action
-        self.q_o_u[0] = torch.stack([
-            F.one_hot(torch.tensor(u_i_hat), self.num_actions).to(torch.float)
-            for u_i_hat in range(self.num_actions)
-        ])
+        # self.q_o_u[0] = torch.stack([
+        #     F.one_hot(torch.tensor(u_i_hat), self.num_actions).to(torch.float)
+        #     for u_i_hat in range(self.num_actions)
+        # ])
+
 
         # EFE of each action ---------------------------------------------------
         for u_i_hat in range(self.num_actions):
@@ -379,25 +381,34 @@ class Agent:
                 assert H.ndimension() == 1, "H is not a 1-dimensional tensor"
 
                 s_pred = self.q_s_u[factor_idx, u_i_hat]  # shape (2, )
+                o_pred = self.q_o_u[factor_idx, u_i_hat]
                 assert s_pred.ndimension() == 1, "s_pred is not a 1-dimensional tensor"
                 assert torch.allclose(s_pred.sum(), torch.tensor(1.0), atol=1e-6), f"s_pred does not sum to 1: {s_pred.sum().item()}"
-                
-                # print(f's prior: {self.q_s_u[factor_idx, u_i_hat]}')
-                # print(f's_pred posterior: {s_pred}')
-                
-                ambiguity[u_i_hat] += (H @ s_pred) # Ambiguity is conditional entropy of emissions
+ 
+                # ambiguity[u_i_hat] += (H @ s_pred) # Ambiguity (Friston)
 
-                salience[u_i_hat] += torch.sum(s_pred * (torch.log(s_pred + EPSILON) - torch.log(self.q_s_u[factor_idx] + EPSILON)))
-                state_xent[u_i_hat] += -torch.sum(s_pred * torch.log(self.q_s_u[factor_idx] + EPSILON))
-                ppe_state[u_i_hat] += -torch.sum(s_pred * torch.log(s_pred + EPSILON)) #Aka ambiguity the other way
-                salience[u_i_hat] += (-torch.sum(s_pred * torch.log(self.q_s_u[factor_idx] + EPSILON))) - (-torch.sum(s_pred * torch.log(s_pred + EPSILON)))
+                H_update = -torch.sum(self.A[factor_idx] * torch.log(self.A[factor_idx] + EPSILON), dim=1) #Actual entropy, not of diagonal
+                ambiguity[u_i_hat] += torch.dot(s_pred, H_update)    # Ambiguity (Pat Update)
 
-                # Assert that salience equals state_xent - ppe
-                assert torch.allclose(salience[u_i_hat], state_xent[u_i_hat] - ppe_state[u_i_hat]), \
-                    f"""Assertion failed for action {u_i_hat}:
-                    Salience = {salience[u_i_hat].item()}, 
-                    State Cross-Entropy - PPE = {(state_xent[u_i_hat] - ppe_state[u_i_hat]).item()}"""
+                # print(f'Prior state: {self.s[factor_idx]}')
+                # print(f'Posterior state: {s_pred}')
+
+                # assert torch.all(self.s[factor_idx] >= 0), "self.s[factor_idx] contains negative values"
+                # assert torch.all(self.s[factor_idx] > EPSILON), "self.s[factor_idx] contains values too close to zero"
+                # assert torch.all(s_pred > EPSILON), "s_pred contains values too close to zero"
+
+                #salience[u_i_hat] += torch.sum(self.s[factor_idx] * (torch.log(self.s[factor_idx] + EPSILON) - torch.log(s_pred + EPSILON)))
+
+                ppe_obs[u_i_hat] += -torch.sum(o_pred * torch.log(o_pred)) 
+                # print(f'Entropy (PPO): {ppe_obs[u_i_hat]}')
+                # print(f'Ambiguity: {ambiguity[u_i_hat]}')
+ 
+        
      
+            
+            #Print stacked PPOs
+            # print(f'Stacked Marginal PPOs: {self.q_o_u}')
+            # print("Finished")
 
             # Joint predictive observation posterior ---------------------------
             # q(o_i, o_j, o_k | u_i_hat)
@@ -408,68 +419,58 @@ class Agent:
                 + '->' 
                 + ''.join([chr(105 + i) for i in range(self.num_agents)])
             )
+
+            # Compute joint probability q(o|u)
             q_o_joint_u = torch.einsum(
                 einsum_str, 
                 *[self.q_o_u[i, u_i_hat] for i in range(self.num_agents)]
             )
-            assert q_o_joint_u.shape == (self.num_actions, ) * (self.num_agents), (
-                f"q_o_joint_u shape {q_o_joint_u.shape} != {(self.num_actions, ) * (self.num_agents)}"
+            assert q_o_joint_u.shape == (self.num_actions,) * (self.num_agents), (
+                f"q_o_joint_u shape {q_o_joint_u.shape} != {(self.num_actions,) * (self.num_agents)}"
             )
             assert torch.allclose(q_o_joint_u.sum(), torch.tensor(1.0)), (
                 f"q_o_joint_u sum {q_o_joint_u.sum()} != 1.0"
             )
 
-            #Format log_C into a legit probability distribution
+            for agent_idx in range(self.num_agents):
+                # Marginalize over all agents except the current one
+                other_agents = tuple(i for i in range(self.num_agents) if i != agent_idx)
+                
+                # Compute marginal from joint by summing over other agents
+                marginal_from_joint = torch.sum(q_o_joint_u, dim=other_agents)
+                
+                # Check that the marginal computed from the joint matches the original marginal
+                assert torch.allclose(marginal_from_joint, self.q_o_u[agent_idx, u_i_hat], atol=1e-6), (
+                    f"Marginal of agent {agent_idx} from joint does not match: "
+                    f"marginal_from_joint = {marginal_from_joint}, "
+                    f"original marginal = {self.q_o_u[agent_idx, u_i_hat]}"
+                )
+
+
+            # print(f'Joint PPOs: {q_o_joint_u}')
+
+            # Format log_C into a proper probability distribution
             flattened_C = torch.softmax(self.log_C.flatten(), dim=0)
             C = flattened_C.view_as(self.log_C)
             log_C = torch.log(C)
-            assert torch.isclose(torch.exp(log_C).sum(), torch.tensor(1.0), atol=1e-6), "The sum of exponentiated values of log C is not 1."
+            assert torch.isclose(torch.exp(log_C).sum(), torch.tensor(1.0), atol=1e-6), (
+                "The sum of exponentiated values of log C is not 1."
+            )
 
-            # Risk term (joint) ------------------------------------------------
-            # i.e. KL[q(o|u) || p*(o)]
+            # Risk term (KL divergence)
             risk[u_i_hat] = torch.tensordot(
-                (torch.log(q_o_joint_u + EPSILON) - log_C), #Updated with probability distribution
                 q_o_joint_u,
+                torch.log(q_o_joint_u + EPSILON) - log_C,
                 dims=self.num_agents
             )
 
-            #Pragmatic value term (joint)
-            # i.e. - H(q(o|u, p*(o)))
+            # Pragmatic value term (Negative cross entropy or Expected Reward)
             pragmatic_value[u_i_hat] = torch.tensordot(
-                q_o_joint_u,  # Use q(o|u), the posterior
-                log_C,  # log(p(o)), assuming log_C is log of p(o)
+                q_o_joint_u,
+                torch.log(C),
                 dims=self.num_agents
             )
-
-            ppe_obs[u_i_hat] = -torch.tensordot(
-            q_o_joint_u,  # q(o|u), the posterior
-            torch.log(q_o_joint_u + EPSILON),  # log(q(o|u))
-            dims=self.num_agents
-            )
-            
-            print(f'Action: {u_i_hat}')
-            print(f'Pragmatic value: {pragmatic_value[u_i_hat]}')
-            print(f'Salience: {salience[u_i_hat]}')
-            print(f'Risk: {risk[u_i_hat]}')
-            # print(f'PPE Obs: {ppe_obs[u_i_hat]}')
-
-
-            print(f'Ambiguity: {ambiguity[u_i_hat]}')
-          #  print(f'PPE State: {ppe_state[u_i_hat]}')
-           # print(f'State X-Entropy: {state_xent[u_i_hat]}')
-
-
-            pragmatic_plus_salience = pragmatic_value[u_i_hat] + salience[u_i_hat]
-            risk_plus_ambiguity = risk[u_i_hat] + ambiguity[u_i_hat]
-
-            assert torch.allclose(pragmatic_plus_salience, -risk_plus_ambiguity), \
-                f"""Assertion failed for action {u_i_hat}:
-                Pragmatic Value + Salience = {pragmatic_plus_salience.item()}
-                -1 * (Risk + Ambiguity) = {-risk_plus_ambiguity.item()}
-                """
-
-
-
+        
             # Novelty ----------------------------------------------------------
             if self.compute_novelty:
                 novelty[u_i_hat] += self.compute_A_novelty(u_i_hat)  # TODO: some sort of regularisation, novelty can be really large
@@ -477,8 +478,49 @@ class Agent:
 
         EFE = ambiguity + risk - novelty
         assert not torch.any(torch.isnan(EFE)), f"EFE has NaN: {EFE}"
-        # assert torch.allclose(risk[u_i] + ambiguity[u_i], EFE[u_i], atol=1e-4), f"[u_i = {u_i}] risk + ambiguity ({risk[u_i]} + {ambiguity[u_i]}={risk[u_i] + ambiguity[u_i]}) does not equal EFE (={EFE[u_i]})"
-        # assert torch.allclose(-salience[u_i] - pragmatic_value[u_i], EFE[u_i], atol=1e-4), f"[u_i = {u_i}] -salience - pragmatic value (-{salience[u_i]} - {pragmatic_value[u_i]}={-salience[u_i] - pragmatic_value[u_i]}) does not equal EFE (={EFE[u_i]})"
+
+        salience = ppe_obs - ambiguity
+
+        # Assert that the salience term >= 0
+        if not torch.all(salience >= -1e-5):
+            invalid_values = salience[salience < 0]
+            raise AssertionError(f"Salience term is not >= 0. Invalid values: {invalid_values}")
+
+
+        EFE1 =  -salience - pragmatic_value
+        EFE2 = risk + ambiguity
+        
+        
+        # Print EFE1 with rounded values
+        print(f'EFE 1: {[round(val.item(), 2) for val in EFE1]}')
+        print(f'Pragmatic value: {[round(val.item(), 2) for val in pragmatic_value]}')
+        print(f'Salience: {[round(val.item(), 2) for val in salience]}')
+        print()
+
+        print(f'Post. Pred Entropy: {[round(val.item(), 2) for val in ppe_obs]}')
+        print()
+
+        # Print EFE2 with rounded values
+        print(f'EFE 2: {[round(val.item(), 2) for val in EFE2]}')
+        print(f'Risk: {[round(val.item(), 2) for val in risk]}')
+        print(f'Ambiguity: {[round(val.item(), 2) for val in ambiguity]}')
+        print()
+
+        # Element-wise percentage difference calculation
+        # percentage_diff = (torch.abs(EFE1 - EFE2) / ((EFE1 + EFE2) / 2)) * 100
+
+        # # Compute the mean percentage difference
+        # avg_percentage_diff = percentage_diff.mean().item()
+        # print(f'Diff: {avg_percentage_diff:.1f}%')
+
+        # Assert that the two tensors are close, and print the average percentage difference if they aren't
+        assert torch.allclose(EFE1, EFE2), \
+            f"""Assertion failed:
+            -Salience - Pragmatic Value = {EFE1}
+            Risk + Ambiguity = {EFE2}
+            Average percentage difference = {avg_percentage_diff:.1f}%"""
+        
+        print('================')
 
         # Data collection ------------------------------------------------------
         self.EFE = EFE
