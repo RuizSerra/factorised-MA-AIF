@@ -12,7 +12,7 @@ import torch.nn.functional as F
 from torch.distributions.dirichlet import Dirichlet
 from torch.distributions.kl import kl_divergence
 from typing import Union
-from types import NoneType
+#from types import NoneType
 
 # import os
 # os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'
@@ -50,15 +50,15 @@ class Agent:
             # Learning
             A_prior_type:str='uniform',
             B_prior_type:str='identity',
-            E_prior:Union[torch.Tensor, NoneType]=None,
-            theta_prior:Union[torch.Tensor, NoneType]=None,
+            E_prior:Union[torch.Tensor, None]=None,
+            theta_prior:Union[torch.Tensor, None]=None,
             A_learning:bool=True,
             B_learning:bool=True,
             learn_every_t_steps:int=6,
             learning_offset:int=0,
             decay:float=0.5,
-            A_BMR:Union[str, NoneType]='identity',
-            B_BMR:Union[str, NoneType]='identity',
+            A_BMR:Union[str, None]='identity',
+            B_BMR:Union[str, None]='identity',
         ):
         '''Initialise an agent with the following parameters
         
