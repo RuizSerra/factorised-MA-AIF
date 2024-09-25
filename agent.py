@@ -48,16 +48,17 @@ class Agent:
             beta_0:float=1.,
             beta_1:float=10.,
             # Learning
-            decay:float=0.5,
             A_prior_type:str='uniform',
             B_prior_type:str='identity',
+            E_prior:Union[torch.Tensor, NoneType]=None,
+            theta_prior:Union[torch.Tensor, NoneType]=None,
             A_learning:bool=True,
             B_learning:bool=True,
             learn_every_t_steps:int=6,
             learning_offset:int=0,
+            decay:float=0.5,
             A_BMR:Union[str, NoneType]='identity',
             B_BMR:Union[str, NoneType]='identity',
-            E_prior:Union[torch.Tensor, NoneType]=None,
         ):
         '''Initialise an agent with the following parameters
         
@@ -82,6 +83,7 @@ class Agent:
             - A_BMR (Union[str, NoneType]): The Bayesian Model Reduction method for the observation model. One of ['identity', 'uniform', None]
             - B_BMR (Union[str, NoneType]): The Bayesian Model Reduction method for the transition model. One of ['identity', 'uniform', None]
             - E_prior (Union[torch.Tensor, NoneType]): The prior for the habits
+            - theta_prior (Union[torch.Tensor, NoneType]): The prior for the initial state
         '''
 
         self.id = id
@@ -92,7 +94,7 @@ class Agent:
         self.num_agents = num_agents = game_matrix.ndim  # Number of players (rank of game tensor)
 
         # Generative model parameters ------------------------------------------
-        self.theta = [torch.ones(num_actions) for _ in range(num_agents)]  # Dirichlet state prior
+        self.theta = [torch.ones(num_actions) for _ in range(num_agents)] if theta_prior is None else theta_prior # Dirichlet state prior
         
         if A_prior_type == 'identity':
             self.A_params = torch.stack([torch.eye(num_actions) for _ in range(num_agents)]) + EPSILON  # Identity observation model prior
