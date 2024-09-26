@@ -43,7 +43,7 @@ TIMESTAMP = '20240920-123043'
 RESULTS_DB_PATH = 'my-results.db'
 
 print(f'Retrieving data matching {TIMESTAMP} from database {RESULTS_DB_PATH}')
-metadata = database_utils.retrieve_timeseries_matching(
+metadata = utils.database.retrieve_timeseries_matching(
     db_path=RESULTS_DB_PATH,
     sql_query=(
         'SELECT * FROM metadata '
@@ -58,7 +58,7 @@ description = metadata.iloc[0]['description']
 timestamp = metadata.iloc[0]['timestamp']
 num_players = metadata.iloc[0]['num_agents']
 
-experiments = database_utils.retrieve_timeseries_matching(
+experiments = utils.database.retrieve_timeseries_matching(
     db_path=RESULTS_DB_PATH,
     sql_query=(
         'SELECT * FROM timeseries '
@@ -74,7 +74,7 @@ To select experiments by `description`, first we need to retrieve the matching `
 ```python
 timestamp_query = '20240920-12'
 sql_query = f"SELECT * FROM metadata WHERE timestamp LIKE '%{timestamp_query}%' AND description LIKE '%2x2 no interoception%'"
-metadata = database_utils.retrieve_timeseries_matching(sql_query=sql_query, db_path=RESULTS_DB_PATH)
+metadata = utils.database.retrieve_timeseries_matching(sql_query=sql_query, db_path=RESULTS_DB_PATH)
 
 commit_sha = metadata.iloc[0]['commit_sha']
 timestamp = metadata.iloc[0]['timestamp']
@@ -82,11 +82,11 @@ timestamp = metadata.iloc[0]['timestamp']
 metadata  # <--- this will show the metadata for the selected experiments
 
 sql_query = f"SELECT * FROM timeseries WHERE timestamp LIKE '%{timestamp}%' AND commit_sha LIKE '%{commit_sha}%'"
-experiments = database_utils.retrieve_timeseries_matching(sql_query=sql_query, db_path=RESULTS_DB_PATH)
+experiments = utils.database.retrieve_timeseries_matching(sql_query=sql_query, db_path=RESULTS_DB_PATH)
 
 experiments  # <--- this will show the timeseries data for the selected experiments
 ```
 
 ## Interface
 
-The `notebooks/database_utils.py` module provides functions to interact with the database.
+The `utils/database.py` module provides functions to interact with the database.
