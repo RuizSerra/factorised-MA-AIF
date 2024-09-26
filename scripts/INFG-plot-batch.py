@@ -49,14 +49,17 @@ if __name__ == '__main__':
         )
     )
 
-    # Parallel execution
-    logging.info(f'\n🚀 Running {len(metadata)} tasks in parallel')
-    with concurrent.futures.ThreadPoolExecutor() as executor:
-        futures = [
-            executor.submit(generate_plots, timestamp, args)
-            for timestamp in metadata['timestamp'].values
-        ]
-        
-        # Optionally wait for all tasks to complete
-        for future in concurrent.futures.as_completed(futures):
-            future.result()  # Ensures any exceptions are raised
+    # Sequential execution
+    for timestamp in metadata['timestamp'].values:
+        generate_plots(timestamp, args)
+
+    # TODO: Parallel execution
+    # logging.info(f'\n🚀 Running {len(metadata)} tasks in parallel')
+    # with concurrent.futures.ThreadPoolExecutor() as executor:
+    #     futures = [
+    #         executor.submit(generate_plots, timestamp, args)
+    #         for timestamp in metadata['timestamp'].values
+    #     ]        
+    #     # Optionally wait for all tasks to complete
+    #     for future in concurrent.futures.as_completed(futures):
+    #         future.result()  # Ensures any exceptions are raised

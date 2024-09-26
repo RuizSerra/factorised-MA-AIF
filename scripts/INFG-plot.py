@@ -308,16 +308,18 @@ def main(args):
     from tslearn.metrics import dtw
     from tslearn.preprocessing import TimeSeriesScalerMeanVariance
 
+    n_clusters = min(args.n_clusters, len(dataset))
+
     # Normalize the data
     scaler = TimeSeriesScalerMeanVariance()
     time_series_data_scaled = scaler.fit_transform(dataset)
 
     # KMeans clustering with DTW
-    model = TimeSeriesKMeans(n_clusters=args.n_clusters, metric="dtw", max_iter=10)
+    model = TimeSeriesKMeans(n_clusters=n_clusters, metric="dtw", max_iter=10)
     labels = model.fit_predict(time_series_data_scaled)
 
     unique_labels, counts = np.unique(labels, return_counts=True)
-    logging.info('Cluster member counts', [(u, c) for u, c in zip(unique_labels, counts)])
+    logging.info(f'Cluster member counts {[(u, c) for u, c in zip(unique_labels, counts)]}')
 
     # Plot clusters
     if num_players == 3:
@@ -329,7 +331,7 @@ def main(args):
         pca.fit(all_data_3d)
 
     # Plotting --------------------------------------------------------------------
-    fig, axs = plt.subplots(1, args.n_clusters, figsize=(3*args.n_clusters, 3))
+    fig, axs = plt.subplots(1, n_clusters, figsize=(3*n_clusters, 3))
     fig.suptitle('Clusters')
     axs = axs.flatten()
 
