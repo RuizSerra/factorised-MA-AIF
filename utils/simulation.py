@@ -16,7 +16,7 @@ import sys
 sys.path.append('../')
 
 from agent import Agent
-import utils.database as database
+import utils.database
 
 logging.basicConfig(level=logging.INFO)
 
@@ -78,7 +78,7 @@ def simulate_parallel(
         logging.info(f'Commit: {commit_sha}')
         logging.info(f'Timestamp: {timestamp}')
         logging.info(f'Storing results to database: {results_db_path}')
-        database.store_metadata(
+        utils.database.store_metadata(
             commit_sha, 
             timestamp, 
             description, 
@@ -106,7 +106,7 @@ def simulate_parallel(
     if results_db_path is not None:
         for result in experiment_results:
             seed, variables_history = result
-            database.store_timeseries(
+            utils.database.store_timeseries(
                 commit_sha, 
                 timestamp, 
                 seed, 
@@ -142,7 +142,7 @@ def simulate(
         logging.info(f'Commit: {commit_sha}')
         logging.info(f'Timestamp: {timestamp}')
         logging.info(f'Storing results to database: {results_db_path}')
-        database.store_metadata(
+        utils.database.store_metadata(
             commit_sha, 
             timestamp, 
             description, 
@@ -181,7 +181,7 @@ def simulate(
         if results_db_path is None:  # Store results in memory (return at the end)
             experiment_results.append((ig.seed, variables_history))
         else:  # Store results in database
-            database.store_timeseries(
+            utils.database.store_timeseries(
                 commit_sha, 
                 timestamp, 
                 ig.seed, 
