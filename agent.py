@@ -10,9 +10,7 @@ import random
 import numpy as np
 import torch.nn.functional as F
 from torch.distributions.dirichlet import Dirichlet
-from torch.distributions.kl import kl_divergence
 from typing import Union
-#from types import NoneType
 
 # import os
 # os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'
