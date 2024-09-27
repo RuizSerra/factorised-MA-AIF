@@ -86,7 +86,7 @@ def highlight_transitions(game_transitions, ax, t_min=0, t_max=None):
                 edgecolor='none',
                 alpha=0.1)
         # Game labels
-        y_mid = (ax.get_ylim()[1] - ax.get_ylim()[0]) / 2  # Calculate the middle of the y-axis
+        y_mid = ax.get_ylim()[0] + (ax.get_ylim()[1] - ax.get_ylim()[0]) / 2
         ax.text(
             sum(durations[:game_idx]) + (1/2)*durations[game_idx],  # x position
             y_mid,  # y position: halfway up the y-axis
