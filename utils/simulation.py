@@ -232,25 +232,21 @@ class IteratedGame:
             T:int, 
             transition_duration:int=10, 
             collect_variables:list=[
-                's', 
+                's',   # TODO: replace all self.s with self.q_s in agents
                 'u', 
-                'gamma', 
-                'theta', 
+                'gamma',
+                'theta',
                 'VFE', 
                 'energy', 
                 'entropy', 
                 'accuracy', 
                 'complexity', 
                 'EFE', 
-                'risk', 
-                'ambiguity', 
-                'salience', 
-                'pragmatic_value', 
-                'novelty', 
+                'EFE_terms',
                 'q_u', 
                 'A', 
                 'B',
-                'payoff',
+                # 'payoff',
             ]
         ):
         '''

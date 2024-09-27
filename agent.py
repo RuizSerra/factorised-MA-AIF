@@ -155,11 +155,7 @@ class Agent:
         self.q_s_u = torch.empty((num_agents, num_actions, num_actions))  # shape (n_agents, n_actions, n_actions)
 
         self.EFE = torch.zeros(num_actions)  # Expected Free Energy (for each possible action)
-        self.ambiguity = torch.zeros(num_actions)
-        self.risk = torch.zeros(num_actions)
-        self.salience = torch.zeros(num_actions)
-        self.pragmatic_value = torch.zeros(num_actions)
-        self.novelty = torch.zeros(num_actions)
+        self.EFE_terms = torch.zeros((num_actions**policy_length, policy_length, 5))  # Store ambiguity, risk, salience, pragmatic value, novelty
         self.q_u = torch.zeros(num_actions)  # q(u_i) Policy of ego (self) agent
         
         self.expected_EFE = None  # Expected EFE averaged over my expected 
@@ -665,8 +661,7 @@ class Agent:
             Risk + Ambiguity = {EFE2}
             Average percentage difference = {avg_percentage_diff:.1f}%"""
 
-        # TODO: return the other terms as well for data collection (at policy node level)
-        return EFE.unsqueeze(0), (ambiguity, risk, salience, pragmatic_value, novelty)
+        return EFE.unsqueeze(0), torch.tensor((ambiguity, risk, salience, pragmatic_value, novelty))
     
     def compute_A_novelty(self, u_i):
         '''
@@ -687,17 +682,16 @@ class Agent:
             node, 
             q_s,
             policy_EFEs=None,
+            policy_EFE_terms=None,
             current_policy=None,
         ):
         '''Function to traverse the tree and collect policies (as tensors)'''
         
         # Root node case
-        if current_policy is None:
-            current_policy = []
-        if policy_EFEs is None:
-            policy_EFEs = []
         if node.u is None:
             node.q_s_u = q_s
+            current_policy = []
+            policy_EFEs = []
             new_policy_EFEs = policy_EFEs
         # Other nodes
         else:
@@ -710,34 +704,40 @@ class Agent:
         
             node.EFE_u, node.EFE_terms = self.compute_efe(node.u, node.q_s_u, self.A, self.log_C)
             new_policy_EFEs = policy_EFEs + [node.EFE_u]  # EFEs collected top-down
-            # TODO collect EFE terms for plotting
+            # EFE terms collected top-down
+            if policy_EFE_terms is None:
+                policy_EFE_terms = node.EFE_terms.unsqueeze(0)
+            else:
+                policy_EFE_terms = torch.vstack((policy_EFE_terms, node.EFE_terms.unsqueeze(0)))
         
         # Base case (leaf node)
         if not node.children:
-            return [torch.cat(new_policy_EFEs)], [torch.cat(current_policy)]
+            return [torch.cat(new_policy_EFEs)], policy_EFE_terms, [torch.cat(current_policy)]
 
         # Recursive case
         EFEs = []
+        EFE_terms = []
         policies = []
         for child in node.children:
             new_policy = current_policy + [child.u]  # Policies collected bottom-up
-            node_EFE, sub_policy = self.collect_policies(child, node.q_s_u, new_policy_EFEs, new_policy)
-            EFEs.extend(node_EFE)
+            subtree_EFEs, subtree_EFE_terms, sub_policy = self.collect_policies(
+                child, node.q_s_u, new_policy_EFEs, policy_EFE_terms, new_policy)
+            EFEs.extend(subtree_EFEs)
+            EFE_terms.extend(subtree_EFE_terms)
             policies.extend(sub_policy)
 
-        return torch.vstack(EFEs), torch.vstack(policies)
+        return torch.vstack(EFEs), torch.vstack(EFE_terms), torch.vstack(policies)
 
     def select_action(self):
         
         # Build the policy tree and "collect" policies
         root = build_policy_tree(torch.arange(self.num_actions), self.policy_length)
-        EFEs, policies = self.collect_policies(
+        EFEs, EFE_terms, policies = self.collect_policies(
             root, 
             q_s=self.s
         )
 
         EFE_policies = EFEs.sum(dim=1)
-        self.EFE = EFE_policies  # Data collection
         q_u = torch.softmax(
             torch.log(self.E) - self.gamma * EFE_policies, 
             dim=0
@@ -751,6 +751,9 @@ class Agent:
             f"q_u.sum(): {q_u.sum()}",
             f"EFE: {EFE_policies}"
         )
+        # Data collection ------------------------------------------------------
+        self.EFE = EFE_policies
+        self.EFE_terms = EFE_terms.reshape(*EFEs.shape, -1)
         self.q_u = q_u
 
         # Select action

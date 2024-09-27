@@ -105,12 +105,8 @@ def make_default_config(variables_history):
         'entropy',
         'accuracy',
         'EFE',
-        'novelty',
+        'EFE_terms',
         'q_u',
-        'risk',
-        'ambiguity',
-        'pragmatic_value',
-        'salience',
         's',
         'A',
     ]
