@@ -44,7 +44,7 @@ class Agent:
             deterministic_actions:bool=False,
             # Precision
             dynamic_precision:bool=True,  
-            beta_0:float=1.,
+            beta_0:float=10.,
             beta_1:float=10.,
             # Learning
             A_prior_type:str='uniform',
