@@ -10,9 +10,7 @@ import random
 import numpy as np
 import torch.nn.functional as F
 from torch.distributions.dirichlet import Dirichlet
-from torch.distributions.kl import kl_divergence
 from typing import Union
-from types import NoneType
 
 # import os
 # os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'
@@ -27,6 +25,7 @@ from types import NoneType
 torch.set_printoptions(precision=2)
 
 EPSILON = torch.finfo().eps
+TOLERANCE = 1e-5
 
 class Agent:
 
@@ -40,23 +39,25 @@ class Agent:
             inference_num_samples:int=100,
             inference_learning_rate:float=1e-2,
             # Planning/action selection
+            policy_length:int=1,
             compute_novelty:bool=False,
             deterministic_actions:bool=False,
             # Precision
             dynamic_precision:bool=True,  
-            beta_0:float=1.,
+            beta_0:float=10.,
             beta_1:float=10.,
             # Learning
-            decay:float=0.5,
             A_prior_type:str='uniform',
             B_prior_type:str='identity',
+            D_prior:Union[torch.Tensor, None]=None,
+            E_prior:Union[torch.Tensor, None]=None,
             A_learning:bool=True,
             B_learning:bool=True,
-            learn_every_t_steps:int=6,
-            learning_offset:int=0,
-            A_BMR:Union[str, NoneType]='identity',
-            B_BMR:Union[str, NoneType]='identity',
-            E_prior:Union[torch.Tensor, NoneType]=None,
+            learn_every_t_steps:int=24,
+            learning_offset:int=6,
+            decay:float=0.5,
+            A_BMR:Union[str, None]='identity',
+            B_BMR:Union[str, None]='identity',
         ):
         '''Initialise an agent with the following parameters
         
@@ -81,6 +82,7 @@ class Agent:
             - A_BMR (Union[str, NoneType]): The Bayesian Model Reduction method for the observation model. One of ['identity', 'uniform', None]
             - B_BMR (Union[str, NoneType]): The Bayesian Model Reduction method for the transition model. One of ['identity', 'uniform', None]
             - E_prior (Union[torch.Tensor, NoneType]): The prior for the habits
+            - theta_prior (Union[torch.Tensor, NoneType]): The prior for the initial state
         '''
 
         self.id = id
@@ -91,8 +93,6 @@ class Agent:
         self.num_agents = num_agents = game_matrix.ndim  # Number of players (rank of game tensor)
 
         # Generative model parameters ------------------------------------------
-        self.theta = [torch.ones(num_actions) for _ in range(num_agents)]  # Dirichlet state prior
-        
         if A_prior_type == 'identity':
             self.A_params = torch.stack([torch.eye(num_actions) for _ in range(num_agents)]) + EPSILON  # Identity observation model prior
         elif A_prior_type == 'uniform':
@@ -111,19 +111,27 @@ class Agent:
             self.B_params = torch.ones((num_agents, num_actions, num_actions, num_actions))
         self.B = self.B_params / self.B_params.sum(dim=2, keepdim=True)
 
-        self.log_C = game_matrix.to(torch.float) # Payoffs for joint actions (in matrix form, from row player's perspective) (force to float)
-        self.s = torch.stack([Dirichlet(theta).mean for theta in self.theta])  # Categorical state prior (D)
-        self.E = torch.ones(num_actions) / num_actions if E_prior is None else E_prior  # Habits 
-        
+        self.set_log_C(game_matrix)  # Log preference over observations (payoffs)
+        self.theta = [torch.ones(num_actions) for _ in range(num_agents)] if D_prior is None else D_prior  # Dirichlet state prior
+        self.D = self.q_s = torch.stack([Dirichlet(theta).mean for theta in self.theta])  # Categorical state prior (D)
+        self.E = torch.ones(num_actions**policy_length) / num_actions if E_prior is None else E_prior  # Habits 
+
         # Learning parameters --------------------------------------------------
+        # Precision
         self.dynamic_precision = dynamic_precision  # Enables precision updating
         self.beta_0 = beta_0  # beta in Gamma distribution (stays fixed)
         self.beta_1 = beta_1  # alpha in Gamma distribution (sets the prior precision mean)
         self.gamma = self.beta_1 / self.beta_0 # Current precision
+        # Perception
         self.interoception = interoception  # Ego can perceive its own hidden state
         self.inference_num_iterations = inference_num_iterations
         self.inference_num_samples = inference_num_samples
         self.inference_learning_rate = inference_learning_rate
+        # Planning
+        self.compute_novelty = compute_novelty
+        self.deterministic_actions = deterministic_actions
+        self.policy_length = policy_length  # Length of the policy (number of actions to consider)
+        # Learning
         self.learn_every_t_steps = learn_every_t_steps  # Learn every t steps
         self.learning_offset = learning_offset  # Random offset for learning
         self.current_random_offset_learning = random.randint(-self.learning_offset, self.learning_offset)  # Random offset for learning
@@ -132,16 +140,14 @@ class Agent:
         self.A_BMR = A_BMR
         self.B_BMR = B_BMR
         self.decay = decay  # Forgetting rate for learning
-        self.compute_novelty = compute_novelty
 
         # Store blanket states history for learning ----------------------------
         self.o_history = []  # Observations (opponent actions) history
-        self.s_history = []  # Hidden states (opponent policies) history
+        self.q_s_history = []  # Beliefs (opponent policies) history
         self.u_history = []  # Actions (ego) history
         
         # Agents values (change at each time step) -----------------------------
         self.u = torch.multinomial(self.E, 1).item()  # Starting action randomly sampled according to habits
-        self.deterministic_actions = deterministic_actions
 
         self.VFE = [None] * num_agents  # Variational Free Energy for each agent (state factor)
         self.accuracy = [None] * num_agents
@@ -152,14 +158,25 @@ class Agent:
         self.q_s_u = torch.empty((num_agents, num_actions, num_actions))  # shape (n_agents, n_actions, n_actions)
 
         self.EFE = torch.zeros(num_actions)  # Expected Free Energy (for each possible action)
-        self.ambiguity = torch.zeros(num_actions)
-        self.risk = torch.zeros(num_actions)
-        self.salience = torch.zeros(num_actions)
-        self.pragmatic_value = torch.zeros(num_actions)
-        self.novelty = torch.zeros(num_actions)
+        self.EFE_terms = torch.zeros((num_actions**policy_length, policy_length, 5))  # Store ambiguity, risk, salience, pragmatic value, novelty for the current time step
         self.q_u = torch.zeros(num_actions)  # q(u_i) Policy of ego (self) agent
         
-        self.expected_EFE = None  # Expected EFE averaged over my expected 
+        self.expected_EFE = None  # Expected EFE (under current policy q(u)): <G> = E_q(u)[ G[u] ]
+
+    def set_log_C(self, game_matrix):
+        '''Set the log preference over observations (payoffs)
+        
+        Args:
+            game_matrix (torch.Tensor): The game matrix (payoffs) of the game, of shape (n_actions, ) * n_agents
+        '''
+        # Normalise log_C into a proper probability distribution
+        # This is not strictly necessary, but it ensures the EFE values are positive
+        flattened_C = torch.softmax(game_matrix.to(torch.float).flatten(), dim=0)
+        C = flattened_C.view_as(game_matrix)
+        self.log_C = torch.log(C + EPSILON)
+        assert torch.isclose(torch.exp(self.log_C).sum(), torch.tensor(1.0), atol=TOLERANCE), (
+            "The sum of exponentiated values of log C is not 1."
+        )
 
     # ==========================================================================
     # Summaries
@@ -187,7 +204,7 @@ class Agent:
         # Format the state priors as percentages, with labels for each state factor
         formatted_state_priors = [
             f"State Factor {i + 1} Estimate: {', '.join([f'{prob * 100:.2f}%' for prob in state])}"
-            for i, state in enumerate(self.s)
+            for i, state in enumerate(self.q_s)
         ]
 
         total_vfe = sum(vfe for vfe in self.VFE if vfe is not None)
@@ -265,7 +282,7 @@ class Agent:
             '''
             # Ego factor
             factor_idx = 0
-            self.s[factor_idx] = self.q_u.clone().detach()  # Ego factor is the previous timestep's policy
+            self.q_s[factor_idx] = self.q_u.clone().detach()  # Ego factor is the previous timestep's policy
             self.theta[factor_idx] = torch.zeros_like(self.theta[factor_idx])  # PLACEHOLDER
             self.VFE[factor_idx] = 0  # PLACEHOLDER
             self.entropy[factor_idx] = 0  # PLACEHOLDER
@@ -273,20 +290,20 @@ class Agent:
             self.accuracy[factor_idx] = 0  # PLACEHOLDER
             self.complexity[factor_idx] = 0  # PLACEHOLDER
             # Alter factors
-            factors = range(1, len(self.s))
+            factors = range(1, len(self.q_s))
         else:
             '''
             Otherwise, ego has to infer all hidden states including its own, 
             i.e. "introspection" (towards self) and "theory of mind" (towards others)
             '''
-            factors = range(len(self.s))
+            factors = range(len(self.q_s))
         
         # Iterate over (remaining) factors
         for factor_idx in factors:
-            s_prev = self.s[factor_idx].clone().detach()  # State t-1
+            s_prev = self.q_s[factor_idx].clone().detach()  # State t-1
             assert torch.allclose(s_prev.sum(), torch.tensor(1.0)), "s_prev tensor does not sum to 1."
             log_prior = torch.log(self.B[factor_idx, self.u] @ s_prev + EPSILON)  # New prior is old posterior
-            log_likelihood = torch.log(self.A[factor_idx].T @ o[factor_idx] + EPSILON)  # Probability of observation given hidden states
+            log_likelihood = torch.log(self.A[factor_idx].T @ o[factor_idx] + EPSILON)  # Likelihood of hidden states for a given observation
 
             variational_params = self.theta[factor_idx].clone().detach().requires_grad_(True)  # Variational Dirichlet distribution for each factor (agent)
             optimizer = torch.optim.Adam([variational_params], lr=self.inference_learning_rate)
@@ -304,7 +321,7 @@ class Agent:
                 variational_params.data.clamp_(min=1e-3)
 
             # Results of variational inference: variational posterior, variational parameters, VFE
-            self.s[factor_idx] = Dirichlet(variational_params).mean.detach()  # Variational posterior
+            self.q_s[factor_idx] = Dirichlet(variational_params).mean.detach()  # Variational posterior
             self.theta[factor_idx] = variational_params.detach()  # Store variational parameters (for next timestep)
             self.VFE[factor_idx] = VFE.detach()
             
@@ -313,20 +330,20 @@ class Agent:
             self.energy[factor_idx] = energy = -torch.sum(s_samples * (log_prior + log_likelihood), dim=-1).mean().detach()
             self.accuracy[factor_idx] = accuracy = torch.sum(s_samples * log_likelihood, dim=-1).mean().detach()
             self.complexity[factor_idx] = complexity = -torch.sum(s_samples * (log_prior - log_s), dim=-1).mean().detach()
-            assert torch.allclose(VFE, energy - entropy, atol=1e-6), "VFE != energy + entropy"
-            assert torch.allclose(VFE, complexity - accuracy, atol=1e-6), "VFE != complexity - accuracy"
+            assert torch.allclose(VFE, energy - entropy, atol=TOLERANCE), "VFE != energy + entropy"
+            assert torch.allclose(VFE, complexity - accuracy, atol=TOLERANCE), "VFE != complexity - accuracy"
 
         # Data collection (for learning and plotting)
-        self.s_history.append(self.s)
+        self.q_s_history.append(self.q_s)
         self.o_history.append(o)
         
-        return self.s
+        return self.q_s
 
     # ==========================================================================
     # Action 
     # ==========================================================================
 
-    def compute_efe(self):
+    def compute_efe_OLD(self):
         '''
         Compute the Expected Free Energy (EFE) for each possible action
         
@@ -339,17 +356,18 @@ class Agent:
         salience = torch.zeros(self.num_actions)
         pragmatic_value = torch.zeros(self.num_actions)
         novelty = torch.zeros(self.num_actions)
+        ppe_obs = torch.zeros(self.num_actions)
         
-        # Predictive state posterior -------------------------------------------
+        # Posterior predictive state -------------------------------------------
         # (per factor 'f' and per possible action 'u')
         # E_{q(s)}[p(s' | s, u_i_hat)]
         self.q_s_u = torch.einsum(
             'funk,fk->fun',
             self.B,          # (f, u, n, k): factor, u (action), next (state), kurrent (state)
-            self.s           # (f, k)
+            self.q_s           # (f, k)
         )  # (f, u, n)
 
-        # Predictive observation posterior -------------------------------------
+        # Posterior predictive observation -------------------------------------
         # (per factor 'f' and per possible action 'u')
         # E_{q(s'|u_i_hat)}[p(o | s)]
         self.q_o_u = torch.einsum(
@@ -358,12 +376,15 @@ class Agent:
             self.q_s_u      # (f, u, s)
         )  # (f, u, o)
         
+
+        #I know #my PPO (INTEROCEPTION)
         # If ego was to take action u_i_hat, the observation o_i would be guaranteed
         # to be o_i = u_i_hat, so replace q(o_i | u_i_hat) = one_hot(u_i_hat) for this action
-        self.q_o_u[0] = torch.stack([
-            F.one_hot(torch.tensor(u_i_hat), self.num_actions).to(torch.float)
-            for u_i_hat in range(self.num_actions)
-        ])
+        # self.q_o_u[0] = torch.stack([
+        #     F.one_hot(torch.tensor(u_i_hat), self.num_actions).to(torch.float)
+        #     for u_i_hat in range(self.num_actions)
+        # ])
+
 
         # EFE of each action ---------------------------------------------------
         for u_i_hat in range(self.num_actions):
@@ -376,13 +397,23 @@ class Agent:
                 assert H.ndimension() == 1, "H is not a 1-dimensional tensor"
 
                 s_pred = self.q_s_u[factor_idx, u_i_hat]  # shape (2, )
+                o_pred = self.q_o_u[factor_idx, u_i_hat]
                 assert s_pred.ndimension() == 1, "s_pred is not a 1-dimensional tensor"
-                
-                ambiguity[u_i_hat] += (H @ s_pred) # Ambiguity is conditional entropy of emissions
-                # FIXME: not sure if these definitions are correct
-                # risk[u_i] += (o_pred @ (torch.log(o_pred + EPSILON)))  - (o_pred @ log_C_modality) # Risk is negative posterior predictive entropy minus pragmatic value
-                # salience[u_i] += -(o_pred @ (torch.log(o_pred + EPSILON)))  - (H @ s_pred) # Salience is negative posterior predictive entropy minus ambiguity (0)
-                # pragmatic_value[u_i] += (o_pred @ log_C_modality) # Pragmatic value is negative cross-entropy
+                assert torch.allclose(s_pred.sum(), torch.tensor(1.0), atol=TOLERANCE), f"s_pred does not sum to 1: {s_pred.sum().item()}"
+ 
+                # ambiguity[u_i_hat] += (H @ s_pred) # Ambiguity (Friston)
+
+                H_update = -torch.sum(self.A[factor_idx] * torch.log(self.A[factor_idx] + EPSILON), dim=1) #Actual entropy, not of diagonal
+                ambiguity[u_i_hat] += torch.dot(s_pred, H_update)    # Ambiguity (Pat Update)
+
+                ppe_obs[u_i_hat] += -torch.sum(o_pred * torch.log(o_pred)) 
+
+                # Assert that ambiguity is greater than zero within tolerance
+                assert torch.all(ambiguity > -TOLERANCE), f"Ambiguity contains values less than or equal to zero: {ambiguity[ambiguity <= 0]}"
+         
+
+ 
+
 
             # Joint predictive observation posterior ---------------------------
             # q(o_i, o_j, o_k | u_i_hat)
@@ -393,25 +424,62 @@ class Agent:
                 + '->' 
                 + ''.join([chr(105 + i) for i in range(self.num_agents)])
             )
+
+            # Compute joint probability q(o|u)
             q_o_joint_u = torch.einsum(
                 einsum_str, 
                 *[self.q_o_u[i, u_i_hat] for i in range(self.num_agents)]
             )
-            assert q_o_joint_u.shape == (self.num_actions, ) * (self.num_agents), (
-                f"q_o_joint_u shape {q_o_joint_u.shape} != {(self.num_actions, ) * (self.num_agents)}"
+            assert q_o_joint_u.shape == (self.num_actions,) * (self.num_agents), (
+                f"q_o_joint_u shape {q_o_joint_u.shape} != {(self.num_actions,) * (self.num_agents)}"
             )
             assert torch.allclose(q_o_joint_u.sum(), torch.tensor(1.0)), (
                 f"q_o_joint_u sum {q_o_joint_u.sum()} != 1.0"
             )
 
-            # Risk term (joint) ------------------------------------------------
-            # i.e. KL[q(o|u) || p*(o)]
+            for agent_idx in range(self.num_agents):
+                # Marginalize over all agents except the current one
+                other_agents = tuple(i for i in range(self.num_agents) if i != agent_idx)
+                
+                # Compute marginal from joint by summing over other agents
+                marginal_from_joint = torch.sum(q_o_joint_u, dim=other_agents)
+                
+                # Check that the marginal computed from the joint matches the original marginal
+                assert torch.allclose(marginal_from_joint, self.q_o_u[agent_idx, u_i_hat], atol=TOLERANCE), (
+                    f"Marginal of agent {agent_idx} from joint does not match: "
+                    f"marginal_from_joint = {marginal_from_joint}, "
+                    f"original marginal = {self.q_o_u[agent_idx, u_i_hat]}"
+                )
+
+
+            # Format log_C into a proper probability distribution
+            flattened_C = torch.softmax(self.log_C.flatten(), dim=0)
+            C = flattened_C.view_as(self.log_C)
+            log_C = torch.log(C)
+            assert torch.isclose(torch.exp(log_C).sum(), torch.tensor(1.0), atol=TOLERANCE), (
+                "The sum of exponentiated values of log C is not 1."
+            )
+
+            ###########
+
+            # C = torch.exp(self.log_C)
+
+            ##########
+
+            # Risk term (KL divergence)
             risk[u_i_hat] = torch.tensordot(
-                (torch.log(q_o_joint_u + EPSILON) - self.log_C),
                 q_o_joint_u,
+                torch.log(q_o_joint_u + EPSILON) - log_C,
                 dims=self.num_agents
             )
 
+            # Pragmatic value term (Negative cross entropy or Expected Reward)
+            pragmatic_value[u_i_hat] = torch.tensordot(
+                q_o_joint_u,
+                torch.log(C),
+                dims=self.num_agents
+            )
+        
             # Novelty ----------------------------------------------------------
             if self.compute_novelty:
                 novelty[u_i_hat] += self.compute_A_novelty(u_i_hat)  # TODO: some sort of regularisation, novelty can be really large
@@ -419,8 +487,51 @@ class Agent:
 
         EFE = ambiguity + risk - novelty
         assert not torch.any(torch.isnan(EFE)), f"EFE has NaN: {EFE}"
-        # assert torch.allclose(risk[u_i] + ambiguity[u_i], EFE[u_i], atol=1e-4), f"[u_i = {u_i}] risk + ambiguity ({risk[u_i]} + {ambiguity[u_i]}={risk[u_i] + ambiguity[u_i]}) does not equal EFE (={EFE[u_i]})"
-        # assert torch.allclose(-salience[u_i] - pragmatic_value[u_i], EFE[u_i], atol=1e-4), f"[u_i = {u_i}] -salience - pragmatic value (-{salience[u_i]} - {pragmatic_value[u_i]}={-salience[u_i] - pragmatic_value[u_i]}) does not equal EFE (={EFE[u_i]})"
+
+        salience = ppe_obs - ambiguity
+
+        # Assert that the salience term >= 0
+        if not torch.all(salience >= -TOLERANCE):
+            invalid_values = salience[salience < 0]
+            raise AssertionError(f"Salience term is not >= 0. Invalid values: {invalid_values}")
+
+
+        EFE1 =  -salience - pragmatic_value
+        EFE2 = risk + ambiguity
+        
+
+        ########### MISC PRINTS FOR CHECKS (can be deleted)
+        
+        # # Print EFE1 with rounded values
+        # print(f'EFE 1: {[round(val.item(), 2) for val in EFE1]}')
+        # print(f'Pragmatic value: {[round(val.item(), 2) for val in pragmatic_value]}')
+        # print(f'Salience: {[round(val.item(), 2) for val in salience]}')
+        # print()
+
+        # print(f'Post. Pred Entropy: {[round(val.item(), 2) for val in ppe_obs]}')
+        # print()
+
+        # # Print EFE2 with rounded values
+        # print(f'EFE 2: {[round(val.item(), 2) for val in EFE2]}')
+        # print(f'Risk: {[round(val.item(), 2) for val in risk]}')
+        # print(f'Ambiguity: {[round(val.item(), 2) for val in ambiguity]}')
+        # print()
+
+        # Element-wise percentage difference calculation
+        percentage_diff = (torch.abs(EFE1 - EFE2) / ((EFE1 + EFE2) / 2)) * 100
+
+        # Compute the mean percentage difference
+        avg_percentage_diff = percentage_diff.mean().item()
+        # print(f'Diff: {avg_percentage_diff:.1f}%')
+
+        # Assert that the two tensors are close, and print the average percentage difference if they aren't
+        assert torch.allclose(EFE1, EFE2, rtol = TOLERANCE, atol = TOLERANCE), \
+            f"""Assertion failed — EFE's don't add up:
+            -Salience - Pragmatic Value = {EFE1}
+            Risk + Ambiguity = {EFE2}
+            Average percentage difference = {avg_percentage_diff:.1f}%"""
+        
+        # print('================')
 
         # Data collection ------------------------------------------------------
         self.EFE = EFE
@@ -431,6 +542,135 @@ class Agent:
         self.novelty = novelty
         
         return EFE
+
+    def compute_efe(self, u, q_s_u, A, log_C):
+        '''
+        Compute the Expected Free Energy (EFE) of a given action
+        
+        Args:
+            u (int): action
+            q_s_u (torch.Tensor): variational posterior over states given action is u
+            A (torch.Tensor): observation likelihood model
+            log_C (torch.Tensor): log preference over observations
+
+        Returns:
+            EFE (torch.Tensor): Expected Free Energy for a given action
+        '''
+        EFE = 0 
+        ambiguity = 0 
+        risk = 0 
+        salience = 0 
+        pragmatic_value = 0 
+        ppo_entropy = 0
+        novelty = 0 
+        
+        # Predictive observation posterior -------------------------------------
+        # (per factor 'f' and per possible action 'u')
+        # E_{q(s'|u)}[p(o | s)]
+        q_o_u = torch.einsum(
+            'fos,fs->fo',
+            A,         # (f, o, s)
+            q_s_u      # (f, s)
+        )              # (f, o)
+        
+        # If ego was to take action u, the observation o_i would be guaranteed
+        # to be o_i = u, so replace q(o_i | u) = one_hot(u) for this action
+        q_o_u[0] = F.one_hot(u, self.num_actions).to(torch.float)
+
+        # EFE computation -------------------------------------------------------
+
+        # Per-factor terms
+        for factor_idx in range(self.num_agents):
+
+            # Expected ambiguity term (per factor) -------------------------
+            s_pred = q_s_u[factor_idx]  # shape (2, )
+            assert s_pred.ndimension() == 1, "s_pred is not a 1-dimensional tensor"
+            assert torch.allclose(
+                    s_pred.sum(), 
+                    torch.tensor(1.0), 
+                    atol=TOLERANCE), (
+                        f"s_pred does not sum to 1: {s_pred.sum().item()}"
+                    )
+            
+            # Ambiguity as per Parr et al. (2022)
+            H = -torch.diag(A[factor_idx].T @ torch.log(A[factor_idx] + EPSILON))
+            assert H.ndimension() == 1, "H is not a 1-dimensional tensor"
+            ambiguity += (H @ s_pred) # Ambiguity is conditional entropy of emissions
+            assert torch.all(ambiguity > -TOLERANCE), (
+                f"Ambiguity contains values less than or equal to zero: "
+                f"{ambiguity[ambiguity <= 0]}"
+            )
+            # Convert any (-TOLERANCE < ambiguity < 0) values to 0
+            ambiguity = torch.clip(ambiguity, min=0.0, max=None)
+            
+            o_pred = q_o_u[factor_idx]  # shape (2, )
+            o_pred = o_pred[o_pred > 0]  # Remove zero values
+            ppo_entropy += -torch.sum(o_pred * torch.log(o_pred)) # Entropy of predictive posterior observation
+
+        # Joint predictive observation posterior ---------------------------
+        # q(o_i, o_j, o_k | u)
+        # Create the einsum subscripts string dynamically for n_agents
+        # e.g., if n_agents = 3, this will be 'i,j,k->ijk'
+        einsum_str = (
+            ','.join([chr(105 + i) for i in range(self.num_agents)]) 
+            + '->' 
+            + ''.join([chr(105 + i) for i in range(self.num_agents)])
+        )
+        q_o_joint_u = torch.einsum(
+            einsum_str, 
+            *[q_o_u[i] for i in range(self.num_agents)]
+        )
+        # assert q_o_joint_u.shape == (self.num_actions, ) * (self.num_agents), (
+        #     f"q_o_joint_u shape {q_o_joint_u.shape} != {(self.num_actions, ) * (self.num_agents)}"
+        # )
+        assert torch.allclose(q_o_joint_u.sum(), torch.tensor(1.0)), (
+            f"q_o_joint_u sum {q_o_joint_u.sum()} != 1.0"
+        )
+
+        # Risk term (joint) ------------------------------------------------
+        # i.e. KL[q(o|u) || p*(o)]
+    
+        risk += torch.tensordot(
+            q_o_joint_u,
+            (torch.log(q_o_joint_u + EPSILON) - log_C),
+            dims=self.num_agents
+        )
+
+        # Pragmatic value term (Negative cross entropy or Expected Reward)
+        pragmatic_value += torch.tensordot(
+            q_o_joint_u,
+            log_C,
+            dims=self.num_agents
+        )
+
+        # Novelty ----------------------------------------------------------
+        if self.compute_novelty:
+            raise NotImplementedError("Novelty computation implementation needs work!!")
+            novelty += self.compute_A_novelty(u)  # TODO: some sort of regularisation, novelty can be really large
+            # TODO: B novelty?
+
+        # EFE of this action ---------------------------------------------------
+        EFE = ambiguity + risk - novelty
+        
+        # Check other ways of computing EFE ------------------------------------
+        salience = ppo_entropy - ambiguity
+        # assert salience >= -TOLERANCE, f"Salience term is not >= 0: {salience}, {ppo_entropy}, {ambiguity}"
+        # if not torch.all(salience >= -TOLERANCE):
+        #     invalid_values = salience[salience < 0]
+        #     raise AssertionError(f"Salience term is not >= 0. Invalid values: {invalid_values}")
+        EFE1 = -salience - pragmatic_value
+        EFE2 = risk + ambiguity
+
+        # Assert that the two tensors are close, and print the average percentage difference if they aren't
+        percentage_diff = (torch.abs(EFE1 - EFE2) / ((EFE1 + EFE2) / 2)) * 100  # Element-wise percentage difference calculation
+        avg_percentage_diff = percentage_diff.mean().item()  # Compute the mean percentage difference
+        assert torch.allclose(EFE1, EFE2, rtol = TOLERANCE, atol = TOLERANCE), \
+            f"""Assertion failed — EFE's don't add up:
+            -Salience - Pragmatic Value = {EFE1}
+            Risk + Ambiguity = {EFE2}
+            Average percentage difference = {avg_percentage_diff:.1f}%"""
+
+        return EFE.unsqueeze(0), torch.tensor((ambiguity, risk, salience, pragmatic_value, novelty))
     
     def compute_A_novelty(self, u_i):
         '''
@@ -445,23 +685,94 @@ class Agent:
                 self.A[factor_idx] @ s_pred, 
                 W[factor_idx] @ s_pred)
         return novelty
+    
+    def collect_policies(
+            self,
+            node, 
+            q_s,
+            policy_EFEs=None,
+            policy_EFE_terms=None,
+            current_policy=None,
+        ):
+        '''Function to traverse the tree and collect policies (as tensors)'''
+        
+        # Root node case
+        if node.u is None:
+            node.q_s_u = q_s
+            current_policy = []
+            policy_EFEs = []
+            new_policy_EFEs = policy_EFEs
+        # Other nodes
+        else:
+            # Compute q(s|u) and EFE(u) for the current node
+            node.q_s_u = torch.einsum(
+                'funk,fk->fun',
+                self.B,             # (f, u, n, k): factor, u (action), next (state), kurrent (state)
+                q_s                 # (f, k)
+            )[:, node.u].squeeze()  # (f, u, n) -> (f, n)
+        
+            node.EFE_u, node.EFE_terms = self.compute_efe(node.u, node.q_s_u, self.A, self.log_C)
+            new_policy_EFEs = policy_EFEs + [node.EFE_u]  # EFEs collected top-down
+            # EFE terms collected top-down
+            if policy_EFE_terms is None:
+                policy_EFE_terms = node.EFE_terms.unsqueeze(0)
+            else:
+                policy_EFE_terms = torch.vstack((policy_EFE_terms, node.EFE_terms.unsqueeze(0)))
+        
+        # Base case (leaf node)
+        if not node.children:
+            return [torch.cat(new_policy_EFEs)], policy_EFE_terms, [torch.cat(current_policy)]
+
+        # Recursive case
+        EFEs = []
+        EFE_terms = []
+        policies = []
+        for child in node.children:
+            new_policy = current_policy + [child.u]  # Policies collected bottom-up
+            subtree_EFEs, subtree_EFE_terms, sub_policy = self.collect_policies(
+                child, node.q_s_u, new_policy_EFEs, policy_EFE_terms, new_policy)
+            EFEs.extend(subtree_EFEs)
+            EFE_terms.extend(subtree_EFE_terms)
+            policies.extend(sub_policy)
+
+        return torch.vstack(EFEs), torch.vstack(EFE_terms), torch.vstack(policies)
 
     def select_action(self):
-        EFE = self.compute_efe()
-        q_u = torch.softmax(torch.log(self.E) - self.gamma * EFE, dim=0)
+        
+        # Build the policy tree and "collect" policies
+        root = build_policy_tree(torch.arange(self.num_actions), self.policy_length)
+        EFEs, EFE_terms, policies = self.collect_policies(
+            root, 
+            q_s=self.q_s
+        )
+
+        EFE_policies = EFEs.sum(dim=1)
+        q_u = torch.softmax(
+            torch.log(self.E) - self.gamma * EFE_policies, 
+            dim=0
+        )
+
+        # EFE = self.compute_efe()
+        # q_u = torch.softmax(torch.log(self.E) - self.gamma * EFE, dim=0)
         assert torch.allclose(q_u.sum(), torch.tensor(1.0)), (
             "q_u policy tensor does not sum to 1.",
             f"q_u: {q_u}",
             f"q_u.sum(): {q_u.sum()}",
-            f"EFE: {EFE}"
+            f"EFE: {EFE_policies}"
         )
+        # Data collection ------------------------------------------------------
+        self.EFE = EFE_policies
+        self.EFE_terms = EFE_terms.reshape(*EFEs.shape, -1)
         self.q_u = q_u
 
-        self.u = torch.multinomial(q_u, 1).item() if not self.deterministic_actions else torch.argmax(q_u).item()
+        # Select action
+        policy_idx = torch.multinomial(q_u, 1).item() if not self.deterministic_actions else torch.argmax(q_u).item()
+        self.u = policies[policy_idx][0].item()
+        # self.u = torch.multinomial(q_u, 1).item() if not self.deterministic_actions else torch.argmax(q_u).item()
         self.u_history.append(self.u)
 
         if self.dynamic_precision:
-            self.update_precision(EFE, q_u)
+            self.update_precision(EFE_policies, q_u)
 
         return self.u
 
@@ -484,7 +795,7 @@ class Agent:
         if len(self.u_history) == (self.learn_every_t_steps + self.current_random_offset_learning):
 
             # Convert history to tensors
-            self.s_history = torch.stack(self.s_history)  # Shape: (T, n_agents, n_actions)
+            self.q_s_history = torch.stack(self.q_s_history)  # Shape: (T, n_agents, n_actions)
             self.o_history = torch.stack(self.o_history)  # Shape: (T, n_agents, n_actions)
             self.u_history = torch.tensor(self.u_history)  # Shape: (T, )
         
@@ -495,7 +806,7 @@ class Agent:
                 self.learn_B()
 
             # Reset history
-            self.s_history = []
+            self.q_s_history = []
             self.o_history = []
             self.u_history = []
             self.current_random_offset_learning = random.randint(-self.learning_offset, self.learning_offset)  # Renew random offset
@@ -503,7 +814,7 @@ class Agent:
     def learn_A(self):
 
         # Expand dimensions to prepare for broadcasting
-        s_hist_expanded = self.s_history.unsqueeze(-2)  # Shape: (T, n_agents, 1, n_actions)
+        s_hist_expanded = self.q_s_history.unsqueeze(-2)  # Shape: (T, n_agents, 1, n_actions)
         o_hist_expanded = self.o_history.unsqueeze(-1)  # Shape: (T, n_agents, n_actions, 1)
 
         # Perform the row-wise outer product
@@ -534,7 +845,7 @@ class Agent:
 
             # Update model parameters if they reduce the free energy
             self.delta_F = []
-            for factor_idx in range(len(self.s)):
+            for factor_idx in range(len(self.q_s)):
                 delta_F = delta_free_energy(
                     A_posterior_params[factor_idx].flatten(), 
                     self.A_params[factor_idx].flatten(), 
@@ -559,8 +870,8 @@ class Agent:
     def learn_B(self):
 
         # Shift arrays for prev and next
-        s_prev = self.s_history[:-1]  # Shape: (T-1, n_agents, n_actions)
-        s_next = self.s_history[1:]  # Shape: (T-1, n_agents, n_actions)
+        s_prev = self.q_s_history[:-1]  # Shape: (T-1, n_agents, n_actions)
+        s_next = self.q_s_history[1:]  # Shape: (T-1, n_agents, n_actions)
         
         # Expand dimensions to prepare for broadcasting
         s_prev_expanded = s_prev.unsqueeze(-2)  # Shape: (T, n_agents, 1, n_actions)
@@ -600,7 +911,7 @@ class Agent:
 
             # Update model parameters if they reduce the free energy
             self.delta_F = []
-            for factor_idx in range(len(self.s)):
+            for factor_idx in range(len(self.q_s)):
                 delta_F = delta_free_energy(
                     B_posterior_params[factor_idx].flatten(), 
                     self.B_params[factor_idx].flatten(), 
@@ -654,3 +965,43 @@ def delta_free_energy(a_posterior, a_prior, a_reduced):
     delta_F = torch.log(B_a_posterior) + torch.log(B_a_reduced) - torch.log(B_a_prior) - torch.log(B_diff)
     
     return delta_F
+
+# ==============================================================================
+# Policy tree
+# ==============================================================================
+
+class TreeNode:
+    def __init__(self, action=None, depth=0):
+        self.u = action  # Tensor or action at this node
+        self.EFE_u = torch.tensor(0)
+        self.children = []  # List to hold child nodes
+        self.depth = depth  # Depth of the node
+
+    def add_child(self, action):
+        # Add a child node with the given action (as a tensor)
+        child = TreeNode(action, self.depth + 1)
+        self.children.append(child)
+        return child
+    
+    def __repr__(self):
+        return f"TreeNode(action={self.u}, depth={self.depth}, children={len(self.children)})"
+    
+
+def build_policy_tree(action_space, max_depth, node=None):
+    '''Recursive function to build the tree'''
+
+    if node is None:
+        node = TreeNode()
+
+    # Base case
+    if node.depth == max_depth:
+        return node
+
+    # Add a child for each action in the action space 
+    # (recursively until the max depth is reached)
+    for action in action_space:
+        child = node.add_child(torch.tensor([action]))
+        build_policy_tree(action_space, max_depth, node=child)
+
+    return node
+
