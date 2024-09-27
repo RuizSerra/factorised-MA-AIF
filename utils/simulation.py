@@ -232,10 +232,6 @@ class IteratedGame:
             T:int, 
             transition_duration:int=10, 
             collect_variables:list=[
-                's',   # TODO: replace all self.s with self.q_s in agents
-                'u', 
-                'gamma',
-                'theta',
                 'VFE', 
                 'energy', 
                 'entropy', 
@@ -243,7 +239,10 @@ class IteratedGame:
                 'complexity', 
                 'EFE', 
                 'EFE_terms',
+                'gamma',
+                'q_s',
                 'q_u', 
+                'u', 
                 'A', 
                 'B',
                 # 'payoff',
@@ -328,14 +327,14 @@ class IteratedGame:
                 ):
                 l = (t - t_transition) / transition_duration  # Mixing parameter value
                 for agent in self.agents:
-                    agent.log_C = (     # Linear interpolation of game matrices
+                    agent.set_log_C(     # Linear interpolation of game matrices
                         (1 - l) * self.game_transitions[transition_count][1] 
                         + l * self.game_transitions[transition_count+1][1]
                     )
 
             elif t == t_transition + transition_duration//2:  # Last time step of transition
                 for agent in self.agents:  # Ensure the interpolation completes
-                    agent.log_C = self.game_transitions[transition_count+1][1]
+                    agent.set_log_C(self.game_transitions[transition_count+1][1])
                 transition_count += 1
                 logging.info(f't={t}/{T} Transitioned to {self.game_transitions[transition_count][0]} ({transition_count+1}/{len(self.game_transitions)} games)')
 

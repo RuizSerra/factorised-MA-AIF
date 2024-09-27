@@ -49,8 +49,8 @@ class Agent:
             # Learning
             A_prior_type:str='uniform',
             B_prior_type:str='identity',
+            D_prior:Union[torch.Tensor, None]=None,
             E_prior:Union[torch.Tensor, None]=None,
-            theta_prior:Union[torch.Tensor, None]=None,
             A_learning:bool=True,
             B_learning:bool=True,
             learn_every_t_steps:int=24,
@@ -93,8 +93,6 @@ class Agent:
         self.num_agents = num_agents = game_matrix.ndim  # Number of players (rank of game tensor)
 
         # Generative model parameters ------------------------------------------
-        self.theta = [torch.ones(num_actions) for _ in range(num_agents)] if theta_prior is None else theta_prior # Dirichlet state prior
-        
         if A_prior_type == 'identity':
             self.A_params = torch.stack([torch.eye(num_actions) for _ in range(num_agents)]) + EPSILON  # Identity observation model prior
         elif A_prior_type == 'uniform':
@@ -113,19 +111,27 @@ class Agent:
             self.B_params = torch.ones((num_agents, num_actions, num_actions, num_actions))
         self.B = self.B_params / self.B_params.sum(dim=2, keepdim=True)
 
-        self.log_C = game_matrix.to(torch.float) # Payoffs for joint actions (in matrix form, from row player's perspective) (force to float)
-        self.s = torch.stack([Dirichlet(theta).mean for theta in self.theta])  # Categorical state prior (D)
+        self.set_log_C(game_matrix)  # Log preference over observations (payoffs)
+        self.theta = [torch.ones(num_actions) for _ in range(num_agents)] if D_prior is None else D_prior  # Dirichlet state prior
+        self.D = self.q_s = torch.stack([Dirichlet(theta).mean for theta in self.theta])  # Categorical state prior (D)
         self.E = torch.ones(num_actions**policy_length) / num_actions if E_prior is None else E_prior  # Habits 
 
         # Learning parameters --------------------------------------------------
+        # Precision
         self.dynamic_precision = dynamic_precision  # Enables precision updating
         self.beta_0 = beta_0  # beta in Gamma distribution (stays fixed)
         self.beta_1 = beta_1  # alpha in Gamma distribution (sets the prior precision mean)
         self.gamma = self.beta_1 / self.beta_0 # Current precision
+        # Perception
         self.interoception = interoception  # Ego can perceive its own hidden state
         self.inference_num_iterations = inference_num_iterations
         self.inference_num_samples = inference_num_samples
         self.inference_learning_rate = inference_learning_rate
+        # Planning
+        self.compute_novelty = compute_novelty
+        self.deterministic_actions = deterministic_actions
+        self.policy_length = policy_length  # Length of the policy (number of actions to consider)
+        # Learning
         self.learn_every_t_steps = learn_every_t_steps  # Learn every t steps
         self.learning_offset = learning_offset  # Random offset for learning
         self.current_random_offset_learning = random.randint(-self.learning_offset, self.learning_offset)  # Random offset for learning
@@ -134,17 +140,14 @@ class Agent:
         self.A_BMR = A_BMR
         self.B_BMR = B_BMR
         self.decay = decay  # Forgetting rate for learning
-        self.compute_novelty = compute_novelty
 
         # Store blanket states history for learning ----------------------------
         self.o_history = []  # Observations (opponent actions) history
-        self.s_history = []  # Hidden states (opponent policies) history
+        self.q_s_history = []  # Beliefs (opponent policies) history
         self.u_history = []  # Actions (ego) history
         
         # Agents values (change at each time step) -----------------------------
         self.u = torch.multinomial(self.E, 1).item()  # Starting action randomly sampled according to habits
-        self.deterministic_actions = deterministic_actions
-        self.policy_length = policy_length  # Length of the policy (number of actions to consider)
 
         self.VFE = [None] * num_agents  # Variational Free Energy for each agent (state factor)
         self.accuracy = [None] * num_agents
@@ -155,10 +158,25 @@ class Agent:
         self.q_s_u = torch.empty((num_agents, num_actions, num_actions))  # shape (n_agents, n_actions, n_actions)
 
         self.EFE = torch.zeros(num_actions)  # Expected Free Energy (for each possible action)
-        self.EFE_terms = torch.zeros((num_actions**policy_length, policy_length, 5))  # Store ambiguity, risk, salience, pragmatic value, novelty
+        self.EFE_terms = torch.zeros((num_actions**policy_length, policy_length, 5))  # Store ambiguity, risk, salience, pragmatic value, novelty for the current time step
         self.q_u = torch.zeros(num_actions)  # q(u_i) Policy of ego (self) agent
         
-        self.expected_EFE = None  # Expected EFE averaged over my expected 
+        self.expected_EFE = None  # Expected EFE (under current policy q(u)): <G> = E_q(u)[ G[u] ]
+
+    def set_log_C(self, game_matrix):
+        '''Set the log preference over observations (payoffs)
+        
+        Args:
+            game_matrix (torch.Tensor): The game matrix (payoffs) of the game, of shape (n_actions, ) * n_agents
+        '''
+        # Normalise log_C into a proper probability distribution
+        # This is not strictly necessary, but it ensures the EFE values are positive
+        flattened_C = torch.softmax(game_matrix.to(torch.float).flatten(), dim=0)
+        C = flattened_C.view_as(game_matrix)
+        self.log_C = torch.log(C + EPSILON)
+        assert torch.isclose(torch.exp(self.log_C).sum(), torch.tensor(1.0), atol=TOLERANCE), (
+            "The sum of exponentiated values of log C is not 1."
+        )
 
     # ==========================================================================
     # Summaries
@@ -186,7 +204,7 @@ class Agent:
         # Format the state priors as percentages, with labels for each state factor
         formatted_state_priors = [
             f"State Factor {i + 1} Estimate: {', '.join([f'{prob * 100:.2f}%' for prob in state])}"
-            for i, state in enumerate(self.s)
+            for i, state in enumerate(self.q_s)
         ]
 
         total_vfe = sum(vfe for vfe in self.VFE if vfe is not None)
@@ -264,7 +282,7 @@ class Agent:
             '''
             # Ego factor
             factor_idx = 0
-            self.s[factor_idx] = self.q_u.clone().detach()  # Ego factor is the previous timestep's policy
+            self.q_s[factor_idx] = self.q_u.clone().detach()  # Ego factor is the previous timestep's policy
             self.theta[factor_idx] = torch.zeros_like(self.theta[factor_idx])  # PLACEHOLDER
             self.VFE[factor_idx] = 0  # PLACEHOLDER
             self.entropy[factor_idx] = 0  # PLACEHOLDER
@@ -272,17 +290,17 @@ class Agent:
             self.accuracy[factor_idx] = 0  # PLACEHOLDER
             self.complexity[factor_idx] = 0  # PLACEHOLDER
             # Alter factors
-            factors = range(1, len(self.s))
+            factors = range(1, len(self.q_s))
         else:
             '''
             Otherwise, ego has to infer all hidden states including its own, 
             i.e. "introspection" (towards self) and "theory of mind" (towards others)
             '''
-            factors = range(len(self.s))
+            factors = range(len(self.q_s))
         
         # Iterate over (remaining) factors
         for factor_idx in factors:
-            s_prev = self.s[factor_idx].clone().detach()  # State t-1
+            s_prev = self.q_s[factor_idx].clone().detach()  # State t-1
             assert torch.allclose(s_prev.sum(), torch.tensor(1.0)), "s_prev tensor does not sum to 1."
             log_prior = torch.log(self.B[factor_idx, self.u] @ s_prev + EPSILON)  # New prior is old posterior
             log_likelihood = torch.log(self.A[factor_idx].T @ o[factor_idx] + EPSILON)  # Likelihood of hidden states for a given observation
@@ -303,7 +321,7 @@ class Agent:
                 variational_params.data.clamp_(min=1e-3)
 
             # Results of variational inference: variational posterior, variational parameters, VFE
-            self.s[factor_idx] = Dirichlet(variational_params).mean.detach()  # Variational posterior
+            self.q_s[factor_idx] = Dirichlet(variational_params).mean.detach()  # Variational posterior
             self.theta[factor_idx] = variational_params.detach()  # Store variational parameters (for next timestep)
             self.VFE[factor_idx] = VFE.detach()
             
@@ -316,10 +334,10 @@ class Agent:
             assert torch.allclose(VFE, complexity - accuracy, atol=TOLERANCE), "VFE != complexity - accuracy"
 
         # Data collection (for learning and plotting)
-        self.s_history.append(self.s)
+        self.q_s_history.append(self.q_s)
         self.o_history.append(o)
         
-        return self.s
+        return self.q_s
 
     # ==========================================================================
     # Action 
@@ -346,7 +364,7 @@ class Agent:
         self.q_s_u = torch.einsum(
             'funk,fk->fun',
             self.B,          # (f, u, n, k): factor, u (action), next (state), kurrent (state)
-            self.s           # (f, k)
+            self.q_s           # (f, k)
         )  # (f, u, n)
 
         # Posterior predictive observation -------------------------------------
@@ -611,15 +629,6 @@ class Agent:
 
         # Risk term (joint) ------------------------------------------------
         # i.e. KL[q(o|u) || p*(o)]
-        
-        # Normalise log_C into a proper probability distribution
-        # This is not strictly necessary, but it ensures the EFE values are positive
-        flattened_C = torch.softmax(self.log_C.flatten(), dim=0)
-        C = flattened_C.view_as(self.log_C)
-        log_C = torch.log(C + EPSILON)
-        assert torch.isclose(torch.exp(log_C).sum(), torch.tensor(1.0), atol=TOLERANCE), (
-            "The sum of exponentiated values of log C is not 1."
-        )
     
         risk += torch.tensordot(
             q_o_joint_u,
@@ -734,7 +743,7 @@ class Agent:
         root = build_policy_tree(torch.arange(self.num_actions), self.policy_length)
         EFEs, EFE_terms, policies = self.collect_policies(
             root, 
-            q_s=self.s
+            q_s=self.q_s
         )
 
         EFE_policies = EFEs.sum(dim=1)
@@ -786,7 +795,7 @@ class Agent:
         if len(self.u_history) == (self.learn_every_t_steps + self.current_random_offset_learning):
 
             # Convert history to tensors
-            self.s_history = torch.stack(self.s_history)  # Shape: (T, n_agents, n_actions)
+            self.q_s_history = torch.stack(self.q_s_history)  # Shape: (T, n_agents, n_actions)
             self.o_history = torch.stack(self.o_history)  # Shape: (T, n_agents, n_actions)
             self.u_history = torch.tensor(self.u_history)  # Shape: (T, )
         
@@ -797,7 +806,7 @@ class Agent:
                 self.learn_B()
 
             # Reset history
-            self.s_history = []
+            self.q_s_history = []
             self.o_history = []
             self.u_history = []
             self.current_random_offset_learning = random.randint(-self.learning_offset, self.learning_offset)  # Renew random offset
@@ -805,7 +814,7 @@ class Agent:
     def learn_A(self):
 
         # Expand dimensions to prepare for broadcasting
-        s_hist_expanded = self.s_history.unsqueeze(-2)  # Shape: (T, n_agents, 1, n_actions)
+        s_hist_expanded = self.q_s_history.unsqueeze(-2)  # Shape: (T, n_agents, 1, n_actions)
         o_hist_expanded = self.o_history.unsqueeze(-1)  # Shape: (T, n_agents, n_actions, 1)
 
         # Perform the row-wise outer product
@@ -836,7 +845,7 @@ class Agent:
 
             # Update model parameters if they reduce the free energy
             self.delta_F = []
-            for factor_idx in range(len(self.s)):
+            for factor_idx in range(len(self.q_s)):
                 delta_F = delta_free_energy(
                     A_posterior_params[factor_idx].flatten(), 
                     self.A_params[factor_idx].flatten(), 
@@ -861,8 +870,8 @@ class Agent:
     def learn_B(self):
 
         # Shift arrays for prev and next
-        s_prev = self.s_history[:-1]  # Shape: (T-1, n_agents, n_actions)
-        s_next = self.s_history[1:]  # Shape: (T-1, n_agents, n_actions)
+        s_prev = self.q_s_history[:-1]  # Shape: (T-1, n_agents, n_actions)
+        s_next = self.q_s_history[1:]  # Shape: (T-1, n_agents, n_actions)
         
         # Expand dimensions to prepare for broadcasting
         s_prev_expanded = s_prev.unsqueeze(-2)  # Shape: (T, n_agents, 1, n_actions)
@@ -902,7 +911,7 @@ class Agent:
 
             # Update model parameters if they reduce the free energy
             self.delta_F = []
-            for factor_idx in range(len(self.s)):
+            for factor_idx in range(len(self.q_s)):
                 delta_F = delta_free_energy(
                     B_posterior_params[factor_idx].flatten(), 
                     self.B_params[factor_idx].flatten(), 

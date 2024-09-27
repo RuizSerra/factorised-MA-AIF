@@ -47,6 +47,10 @@ plt.rc('text', usetex=False)  # Disable LaTeX rendering for simplicity (enable i
 # Helper functions
 # ==============================================================================
 
+def unstack(a, axis=0):
+    '''Source: https://stackoverflow.com/a/64097936/21740893'''
+    return [np.squeeze(e, axis) for e in np.split(a, a.shape[axis], axis=axis)]
+
 def get_action_labels(num_actions):
     '''Define action labels based on the number of actions'''
     if num_actions == 2:
@@ -82,9 +86,10 @@ def highlight_transitions(game_transitions, ax, t_min=0, t_max=None):
                 edgecolor='none',
                 alpha=0.1)
         # Game labels
+        y_mid = (ax.get_ylim()[1] - ax.get_ylim()[0]) / 2  # Calculate the middle of the y-axis
         ax.text(
-            sum(durations[:game_idx]) + (1/2)*durations[game_idx], 
-            ax.get_ylim()[1] * 0.7, 
+            sum(durations[:game_idx]) + (1/2)*durations[game_idx],  # x position
+            y_mid,  # y position: halfway up the y-axis
             label, 
             color='gray', 
             alpha=0.4,
@@ -98,17 +103,20 @@ def make_default_config(variables_history):
 
     # Data preprocessing
     required_variables_names = [
-        'gamma',
-        'VFE',
-        'energy',
-        'complexity',
-        'entropy',
-        'accuracy',
-        'EFE',
+        'VFE', 
+        'energy', 
+        'entropy', 
+        'accuracy', 
+        'complexity', 
+        'EFE', 
         'EFE_terms',
-        'q_u',
-        's',
-        'A',
+        'gamma',
+        'q_s',
+        'q_u', 
+        'u', 
+        'A', 
+        'B',
+        # 'payoff',
     ]
     for required_variable_name in required_variables_names:
         if not isinstance(variables_history[required_variable_name], np.ndarray):
@@ -119,6 +127,16 @@ def make_default_config(variables_history):
             variables_history[required_variable_name] = (
                 variables_history[required_variable_name].copy().squeeze()
             )
+
+    (
+        ambiguity,   # each of shape (num_actions**policy_length, policy_length)
+        risk, 
+        salience, 
+        pragmatic_value, 
+        novelty
+    ) = unstack(variables_history['EFE_terms'], axis=-1)
+
+    # variables_history['EFE_terms'][0][0].shape == torch.Size([2, 1, 5])
 
     # Define what plots we want to compute and show
     plot_configs = [
@@ -134,22 +152,22 @@ def make_default_config(variables_history):
         {'plot_fn': plot_efe,      
         'args': (
             variables_history['EFE'], 
-            variables_history['novelty'])},
+            novelty)},
         {'plot_fn': plot_expected_efe,      
         'args': (
             variables_history['q_u'],
             variables_history['EFE'],
-            variables_history['risk'],
-            variables_history['ambiguity'],
-            variables_history['pragmatic_value'],
-            variables_history['salience'],
-            variables_history['novelty'],)},
+            risk,
+            ambiguity,
+            pragmatic_value,
+            salience,
+            novelty,)},
         {'plot_fn': plot_policy_heatmap, 
         'args': (variables_history['q_u'], )},
         {'plot_fn': plot_policy_entropy, 
         'args': (variables_history['q_u'], )},
         {'plot_fn': plot_inferred_policy_heatmap, 
-        'args': (variables_history['s'], )},
+        'args': (variables_history['q_s'], )},
         {'plot_fn': plot_A, 
         'args': (variables_history['A'], )},
     ]
@@ -173,7 +191,15 @@ def plot(plot_configs=None, num_players=0,
                 ax=ax, i=col_idx,
                 t_min=t_min, t_max=t_max,
             )
-            if game_transitions and not t_max:  # TODO: show transitions even if t_max provided
+            if (
+                game_transitions 
+                and not t_max
+                and plot_configs[row_idx]['plot_fn'].__name__ not in [
+                    'plot_policy_heatmap', 
+                    'plot_inferred_policy_heatmap', 
+                    'plot_A'
+                ]
+            ):  # TODO: show transitions even if t_max provided
                 highlight_transitions(game_transitions, ax)
             if TIGHT_LAYOUT and row_idx < n_rows - 1:
                 ax.set_xlabel(None)
@@ -358,18 +384,18 @@ def plot_expected_efe(
     for t in range(q_u_history.shape[0]):
         for a in range(q_u_history.shape[1]):
             expected_efe[t, a] = np.dot(q_u_history[t, a], efe_history[t, a])
-            # weighted_pragmatic_value[t, a] = np.dot(q_u_history[t, a], pragmatic_value_history[t, a])
-            # weighted_salience[t, a] = np.dot(q_u_history[t, a], salience_history[t, a])
-            # weighted_risk[t, a] = np.dot(q_u_history[t, a], risk_history[t, a])
-            # weighted_ambiguity[t, a] = np.dot(q_u_history[t, a], ambiguity_history[t, a])
-            # weighted_novelty[t, a] = np.dot(q_u_history[t, a], novelty_history[t, a])
+            weighted_pragmatic_value[t, a] = np.dot(q_u_history[t, a], pragmatic_value_history[t, a])
+            weighted_salience[t, a] = np.dot(q_u_history[t, a], salience_history[t, a])
+            weighted_risk[t, a] = np.dot(q_u_history[t, a], risk_history[t, a])
+            weighted_ambiguity[t, a] = np.dot(q_u_history[t, a], ambiguity_history[t, a])
+            weighted_novelty[t, a] = np.dot(q_u_history[t, a], novelty_history[t, a])
             
     summed_efe = expected_efe[t_min:t_max, i]  
-    # summed_risk = weighted_risk[t_min:t_max, i]
-    # summed_ambiguity = weighted_ambiguity[t_min:t_max, i]
-    # summed_salience = -weighted_salience[t_min:t_max, i]
-    # summed_pragmatic_value = -weighted_pragmatic_value[t_min:t_max, i]
-    # summed_novelty = -weighted_novelty[t_min:t_max, i] if weighted_novelty is not None else None
+    summed_risk = weighted_risk[t_min:t_max, i]
+    summed_ambiguity = weighted_ambiguity[t_min:t_max, i]
+    summed_salience = -weighted_salience[t_min:t_max, i]
+    summed_pragmatic_value = -weighted_pragmatic_value[t_min:t_max, i]
+    summed_novelty = -weighted_novelty[t_min:t_max, i] if weighted_novelty is not None else None
     
     # Plot EFE on the primary y-axis
     ax.plot(
@@ -377,41 +403,41 @@ def plot_expected_efe(
         summed_efe, 
         label='E[G]', color=EFE_COLOR, linewidth=1.5)
     
-    # # Create a secondary y-axis for Risk, Ambiguity, Salience, Pragmatic Value, and Novelty)
-    # ax2 = ax.twinx()
-    # ax2.plot(
-    #     x_range, 
-    #     summed_risk, 
-    #     label='Risk', color=RISK_COLOR, linestyle=':', linewidth=1.2)
-    # ax2.plot(
-    #     x_range, 
-    #     summed_ambiguity, 
-    #     label='Ambiguity', color=AMBIGUITY_COLOR, linestyle=':', linewidth=1.2)
-    # ax2.plot(
-    #     x_range, 
-    #     summed_salience, 
-    #     label='Salience', color=SALIENCE_COLOR, linestyle=':', linewidth=1.2)
-    # ax2.plot(
-    #     x_range, 
-    #     summed_pragmatic_value, 
-    #     label='Pragmatic Value', color=PRAGMATIC_COLOR, linestyle=':', linewidth=1.2)
+    # Create a secondary y-axis for Risk, Ambiguity, Salience, Pragmatic Value, and Novelty)
+    ax2 = ax.twinx()
+    ax2.plot(
+        x_range, 
+        summed_risk, 
+        label='Risk', color=RISK_COLOR, linestyle=':', linewidth=1.2)
+    ax2.plot(
+        x_range, 
+        summed_ambiguity, 
+        label='Ambiguity', color=AMBIGUITY_COLOR, linestyle=':', linewidth=1.2)
+    ax2.plot(
+        x_range, 
+        summed_salience, 
+        label='Salience', color=SALIENCE_COLOR, linestyle=':', linewidth=1.2)
+    ax2.plot(
+        x_range, 
+        summed_pragmatic_value, 
+        label='Pragmatic Value', color=PRAGMATIC_COLOR, linestyle=':', linewidth=1.2)
     
-    # # Plot Novelty if provided
-    # if summed_novelty is not None:
-    #     ax2.plot(
-    #         x_range, 
-    #         summed_novelty, 
-    #         label='Novelty', color=NOVELTY_COLOR, linestyle=':', linewidth=1.2)
+    # Plot Novelty if provided
+    if summed_novelty is not None:
+        ax2.plot(
+            x_range, 
+            summed_novelty, 
+            label='Novelty', color=NOVELTY_COLOR, linestyle=':', linewidth=1.2)
     
     # Set labels and title
     ax.set_title(f'Expected EFE Agent {chr(105+i)}', fontsize=label_font_size)
     ax.set_xlabel('Time step (t)', fontsize=label_font_size)
     if not ONLY_LEFT_Y_LABEL or (ONLY_LEFT_Y_LABEL and i == 0):
         ax.set_ylabel('E[G]', color='black', fontsize=label_font_size)
-        # ax2.set_ylabel('Nats', fontsize=label_font_size)
+        ax2.set_ylabel('Nats', fontsize=label_font_size)
     if SHOW_LEGEND:
         ax.legend(loc='upper left')
-        # ax2.legend(loc='upper right')
+        ax2.legend(loc='upper right')
         # ax2.legend(loc='upper center', bbox_to_anchor=(0.5, -0.15), ncol=3)
 
 
@@ -537,6 +563,7 @@ def plot_policy_entropy(
     
     ax.set_title(f'Policy entropy Agent {chr(105+i)}', fontsize=label_font_size)
     ax.set_xlabel('Time step (t)', fontsize=label_font_size)
+    ax.set_ylim(-0.1, max_ent+0.1)
     if not ONLY_LEFT_Y_LABEL or (ONLY_LEFT_Y_LABEL and i == 0):
         ax.set_ylabel('H[q(u)]', fontsize=label_font_size)
 
