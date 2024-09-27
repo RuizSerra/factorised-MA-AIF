@@ -158,6 +158,9 @@ if __name__ == '__main__':
 
     META_GAME_TRANSITIONS = [
         [   
+            ('SH', stag_hunt_2player, 500),
+        ],
+        [   
             ('SH3', stag_hunt_3player_M3, 500),
         ],
         [   
@@ -165,25 +168,24 @@ if __name__ == '__main__':
         ],
     ]
 
-    # Agent configuration ---------------------------------------------------------
-    META_AGENT_KWARGS = [
-        [
-            dict(
-                beta_1=10.,
-                learn_every_t_steps=24,
-                learning_offset=6,
-                # E_prior=torch.tensor([e, 1-e])
-                theta_prior=[torch.tensor([e, 10.-e]) for _ in range(3)],
-            ),
-        ]
-        for e in torch.arange(1., 10., 0.5)
-    ]
 
     # Run simulations --------------------------------------------------------------
     for game_transitions in META_GAME_TRANSITIONS:
+
+        # Agent configuration ---------------------------------------------------------
+        num_players = game_transitions[0][1].ndim
+        
+        META_AGENT_KWARGS = [
+            [
+                dict(
+                    # E_prior=torch.tensor([e, 1-e])
+                    D_prior=[torch.tensor([e, 10.-e]) for _ in range(num_players)],
+                ),
+            ]
+            for e in torch.arange(1., 10., 0.5)
+        ]
         
         logging.info(f'Running simulation for game transitions: {game_transitions}')
-        num_players = game_transitions[0][1].ndim
         description = '-'.join([game[0] for game in game_transitions])
         
         for agent_kwargs in META_AGENT_KWARGS:

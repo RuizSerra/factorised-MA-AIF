@@ -8,7 +8,7 @@ import torch.nn.functional as F
 import random
 import concurrent.futures
 from datetime import datetime
-# import git
+import git
 import logging
 from typing import Union
 
