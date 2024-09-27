@@ -21,152 +21,154 @@ if __name__ == '__main__':
     argparser.add_argument('--db-path', type=str, default='experiment-results.db')
     args = argparser.parse_args()
 
+    logging.basicConfig(level=logging.INFO)
+
     # Game configuration ----------------------------------------------------------
 
     # TODO: possibly move these into separate yaml files (e.g. one for 2-agent games, one for 3-agent games)
-    # META_GAME_TRANSITIONS = [
-    #     # "Neighbour" game transitions
-    #     [   
-    #         ('PD', prisoners_dilemma_2player, 500),
-    #         ('SH', stag_hunt_2player, 500),
-    #     ],
-    #     [   
-    #         ('SH', stag_hunt_2player, 500),
-    #         ('Ha', harmony_2player, 500),
-    #     ],
-    #     [   
-    #         ('Ha', harmony_2player, 500),
-    #         ('Ch', chicken_2player, 500),
-    #     ],
-    #     [   
-    #         ('Ch', chicken_2player, 500),
-    #         ('PD', prisoners_dilemma_2player, 500),
-    #     ],
-    #     # "Neighbour" game transitions (reversed)
-    #     [   
-    #         ('Ch', chicken_2player, 500),
-    #         ('Ha', harmony_2player, 500),
-    #     ],
-    #     [   
-    #         ('Ha', harmony_2player, 500),
-    #         ('SH', stag_hunt_2player, 500),
-    #     ],
-    #     [   
-    #         ('SH', stag_hunt_2player, 500),
-    #         ('PD', prisoners_dilemma_2player, 500),
-    #     ],
-    #     [
-    #         ('PD', prisoners_dilemma_2player, 500),
-    #         ('Ch', chicken_2player, 500),
-    #     ],
-    #     # "Across" game transitions
-    #     [   
-    #         ('Ch', chicken_2player, 500),
-    #         ('SH', stag_hunt_2player, 500),
-    #     ],
-    #     [   
-    #         ('SH', stag_hunt_2player, 500),
-    #         ('Ch', chicken_2player, 500),
-    #     ],
-    #     [   
-    #         ('PD', prisoners_dilemma_2player, 500),
-    #         ('Ha', harmony_2player, 500),
-    #     ],
-    #     [   
-    #         ('Ha', harmony_2player, 500),
-    #         ('PD', prisoners_dilemma_2player, 500),
-    #     ],
-    # ]
-
-    # META_GAME_TRANSITIONS = [
-    #     # "Neighbour" game transitions
-    #     [   
-    #         ('PD', prisoners_dilemma_3player, 500),
-    #         ('SH', stag_hunt_3player_M3, 500),
-    #     ],
-    #     [   
-    #         ('SH', stag_hunt_3player_M3, 500),
-    #         ('Ha', harmony_3player, 500),
-    #     ],
-    #     [   
-    #         ('PD', prisoners_dilemma_3player, 500),
-    #         ('SH2', stag_hunt_3player_M2, 500),
-    #     ],
-    #     [   
-    #         ('SH2', stag_hunt_3player_M2, 500),
-    #         ('Ha', harmony_3player, 500),
-    #     ],
-    #     [   
-    #         ('Ha', harmony_3player, 500),
-    #         ('Ch', chicken_3player, 500),
-    #     ],
-    #     [   
-    #         ('Ch', chicken_3player, 500),
-    #         ('PD', prisoners_dilemma_3player, 500),
-    #     ],
-    #     # "Neighbour" game transitions (reversed)
-    #     [   
-    #         ('Ch', chicken_3player, 500),
-    #         ('Ha', harmony_3player, 500),
-    #     ],
-    #     [   
-    #         ('Ha', harmony_3player, 500),
-    #         ('SH', stag_hunt_3player_M3, 500),
-    #     ],
-    #     [   
-    #         ('Ha', harmony_3player, 500),
-    #         ('SH2', stag_hunt_3player_M2, 500),
-    #     ],
-    #     [   
-    #         ('SH', stag_hunt_3player_M3, 500),
-    #         ('PD', prisoners_dilemma_3player, 500),
-    #     ],
-    #     [   
-    #         ('SH2', stag_hunt_3player_M2, 500),
-    #         ('PD', prisoners_dilemma_3player, 500),
-    #     ],
-    #     [
-    #         ('PD', prisoners_dilemma_3player, 500),
-    #         ('Ch', chicken_3player, 500),
-    #     ],
-    #     # "Across" game transitions
-    #     [   
-    #         ('Ch', chicken_3player, 500),
-    #         ('SH', stag_hunt_3player_M3, 500),
-    #     ],
-    #     [   
-    #         ('SH', stag_hunt_3player_M3, 500),
-    #         ('Ch', chicken_3player, 500),
-    #     ],
-    #     [   
-    #         ('Ch', chicken_3player, 500),
-    #         ('SH2', stag_hunt_3player_M2, 500),
-    #     ],
-    #     [   
-    #         ('SH2', stag_hunt_3player_M2, 500),
-    #         ('Ch', chicken_3player, 500),
-    #     ],
-    #     [   
-    #         ('PD', prisoners_dilemma_3player, 500),
-    #         ('Ha', harmony_3player, 500),
-    #     ],
-    #     [   
-    #         ('Ha', harmony_3player, 500),
-    #         ('PD', prisoners_dilemma_3player, 500),
-    #     ],
-    # ]
-
     META_GAME_TRANSITIONS = [
+        # "Neighbour" game transitions
         # [   
+        #     ('PD', prisoners_dilemma_2player, 500),
         #     ('SH', stag_hunt_2player, 500),
         # ],
+        # [   
+        #     ('SH', stag_hunt_2player, 500),
+        #     ('Ha', harmony_2player, 500),
+        # ],
+        # [   
+        #     ('Ha', harmony_2player, 500),
+        #     ('Ch', chicken_2player, 500),
+        # ],
+        # [   
+        #     ('Ch', chicken_2player, 500),
+        #     ('PD', prisoners_dilemma_2player, 500),
+        # ],
+        # "Neighbour" game transitions (reversed)
+        # [   
+        #     ('Ch', chicken_2player, 500),
+        #     ('Ha', harmony_2player, 500),
+        # ],
+        # [   
+        #     ('Ha', harmony_2player, 500),
+        #     ('SH', stag_hunt_2player, 500),
+        # ],
+        # [   
+        #     ('SH', stag_hunt_2player, 500),
+        #     ('PD', prisoners_dilemma_2player, 500),
+        # ],
+        # [
+        #     ('PD', prisoners_dilemma_2player, 500),
+        #     ('Ch', chicken_2player, 500),
+        # ],
+        # "Across" game transitions
         [   
-            ('SH3', stag_hunt_3player_M3, 500),
+            ('Ch', chicken_2player, 500),
+            ('SH', stag_hunt_2player, 500),
         ],
         [   
-            ('SH2', stag_hunt_3player_M2, 500),
+            ('SH', stag_hunt_2player, 500),
+            ('Ch', chicken_2player, 500),
         ],
+        # [   
+        #     ('PD', prisoners_dilemma_2player, 500),
+        #     ('Ha', harmony_2player, 500),
+        # ],
+        # [   
+        #     ('Ha', harmony_2player, 500),
+        #     ('PD', prisoners_dilemma_2player, 500),
+        # ],
     ]
+
+    # META_GAME_TRANSITIONS = [
+    #     # "Neighbour" game transitions
+    #     [   
+    #         ('PD', prisoners_dilemma_3player, 500),
+    #         ('SH', stag_hunt_3player_M3, 500),
+    #     ],
+    #     [   
+    #         ('SH', stag_hunt_3player_M3, 500),
+    #         ('Ha', harmony_3player, 500),
+    #     ],
+    #     [   
+    #         ('PD', prisoners_dilemma_3player, 500),
+    #         ('SH2', stag_hunt_3player_M2, 500),
+    #     ],
+    #     [   
+    #         ('SH2', stag_hunt_3player_M2, 500),
+    #         ('Ha', harmony_3player, 500),
+    #     ],
+    #     [   
+    #         ('Ha', harmony_3player, 500),
+    #         ('Ch', chicken_3player, 500),
+    #     ],
+    #     [   
+    #         ('Ch', chicken_3player, 500),
+    #         ('PD', prisoners_dilemma_3player, 500),
+    #     ],
+    #     # "Neighbour" game transitions (reversed)
+    #     [   
+    #         ('Ch', chicken_3player, 500),
+    #         ('Ha', harmony_3player, 500),
+    #     ],
+    #     [   
+    #         ('Ha', harmony_3player, 500),
+    #         ('SH', stag_hunt_3player_M3, 500),
+    #     ],
+    #     [   
+    #         ('Ha', harmony_3player, 500),
+    #         ('SH2', stag_hunt_3player_M2, 500),
+    #     ],
+    #     [   
+    #         ('SH', stag_hunt_3player_M3, 500),
+    #         ('PD', prisoners_dilemma_3player, 500),
+    #     ],
+    #     [   
+    #         ('SH2', stag_hunt_3player_M2, 500),
+    #         ('PD', prisoners_dilemma_3player, 500),
+    #     ],
+    #     [
+    #         ('PD', prisoners_dilemma_3player, 500),
+    #         ('Ch', chicken_3player, 500),
+    #     ],
+    #     # "Across" game transitions
+    #     [   
+    #         ('Ch', chicken_3player, 500),
+    #         ('SH', stag_hunt_3player_M3, 500),
+    #     ],
+    #     [   
+    #         ('SH', stag_hunt_3player_M3, 500),
+    #         ('Ch', chicken_3player, 500),
+    #     ],
+    #     [   
+    #         ('Ch', chicken_3player, 500),
+    #         ('SH2', stag_hunt_3player_M2, 500),
+    #     ],
+    #     [   
+    #         ('SH2', stag_hunt_3player_M2, 500),
+    #         ('Ch', chicken_3player, 500),
+    #     ],
+    #     [   
+    #         ('PD', prisoners_dilemma_3player, 500),
+    #         ('Ha', harmony_3player, 500),
+    #     ],
+    #     [   
+    #         ('Ha', harmony_3player, 500),
+    #         ('PD', prisoners_dilemma_3player, 500),
+    #     ],
+    # ]
+
+    # META_GAME_TRANSITIONS = [
+    #     # [   
+    #     #     ('SH', stag_hunt_2player, 500),
+    #     # ],
+    #     [   
+    #         ('SH3', stag_hunt_3player_M3, 500),
+    #     ],
+    #     [   
+    #         ('SH2', stag_hunt_3player_M2, 500),
+    #     ],
+    # ]
 
 
     # Run simulations --------------------------------------------------------------
@@ -179,10 +181,10 @@ if __name__ == '__main__':
             [
                 dict(
                     # E_prior=torch.tensor([e, 1-e])
-                    D_prior=[torch.tensor([e, 10.-e]) for _ in range(num_players)],
+                    # D_prior=[torch.tensor([e, 10.-e]) for _ in range(num_players)],
                 ),
             ]
-            for e in torch.arange(1., 10., 0.5)
+            # for e in torch.arange(1., 10., 0.5)
         ]
         
         logging.info(f'Running simulation for game transitions: {game_transitions}')

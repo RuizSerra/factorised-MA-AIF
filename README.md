@@ -29,3 +29,16 @@ Factorised Active Inference Agents for Multi-Agent Interactions
     - `INFG-plot.py`: Plot the results of multiple simulations
 - [`notebooks/`](./notebooks/): Jupyter notebooks and supporting code
 - [`docs/`](./docs/): Documentation and figures
+
+## Scripts
+
+```bash
+# 1. Set simulation (expriment) configuration
+# [for now, we edit `scripts/INFG-simulate.py` to change the simulation parameters]
+
+# 2. Run simulations
+nohup python -OO INFG-simulate.py --num-repeats=20 --db-path=my-experiments.db &
+
+# 3. Plot all results
+python INFG-plot-batch.py --db-path=my-experiments.db --timestamp=20240928
+```
