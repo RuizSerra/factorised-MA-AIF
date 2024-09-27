@@ -99,14 +99,22 @@ def main(args):
         q_u_hist = loaded_vars['q_u']
         # trajectory = q_u_hist[T_MIN:T_MAX, :, 0].copy()
 
+        (
+            ambiguity,   # each of shape (T, num_actions**policy_length, policy_length)
+            risk, 
+            salience, 
+            pragmatic_value, 
+            novelty
+        ) = utils.plotting.unstack(loaded_vars['EFE_terms'], axis=-1)
+
         utils.plotting.plot_expected_efe_ensemble(
             loaded_vars['q_u'], 
             loaded_vars['EFE'], 
-            np.zeros_like(loaded_vars['pragmatic_value']), 
-            np.zeros_like(loaded_vars['salience']), 
-            np.zeros_like(loaded_vars['risk']), 
-            np.zeros_like(loaded_vars['ambiguity']), 
-            np.zeros_like(loaded_vars['novelty']), 
+            np.zeros_like(risk),    # Placeholder arrays for the other terms to reduce clutter
+            np.zeros_like(ambiguity), 
+            np.zeros_like(salience), 
+            np.zeros_like(pragmatic_value), 
+            np.zeros_like(novelty), 
             ax1
         )
 
@@ -151,11 +159,11 @@ def main(args):
         'args': (
             np.array(variables_history['q_u']),
             np.array(variables_history['EFE']),
-            np.array(variables_history['pragmatic_value']),
-            np.array(variables_history['salience']),
-            np.array(variables_history['risk']),
-            np.array(variables_history['ambiguity']),
-            np.array(variables_history['novelty']),)},
+            risk,
+            ambiguity,
+            salience,
+            pragmatic_value,
+            novelty,)},
         {'plot_fn': utils.plotting.plot_ensemble_policies, 
         'args': (np.array(variables_history['q_u']), game_transitions,)},   
         {'plot_fn': utils.plotting.plot_action_history,
@@ -438,6 +446,7 @@ if __name__ == '__main__':
     argparser.add_argument('--n-clusters', type=int, default=6)
     args = argparser.parse_args()
 
+    logging.basicConfig(level=logging.INFO)
     logging.info(f'\nArguments: {args}')
 
     main(args)

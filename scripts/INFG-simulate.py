@@ -157,9 +157,9 @@ if __name__ == '__main__':
     # ]
 
     META_GAME_TRANSITIONS = [
-        [   
-            ('SH', stag_hunt_2player, 500),
-        ],
+        # [   
+        #     ('SH', stag_hunt_2player, 500),
+        # ],
         [   
             ('SH3', stag_hunt_3player_M3, 500),
         ],

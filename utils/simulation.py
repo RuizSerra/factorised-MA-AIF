@@ -20,8 +20,6 @@ import utils.database
 
 logging.basicConfig(level=logging.INFO)
 
-
-
 def run_single_simulation(game_transitions, agent_kwargs, T, seed):
     
     # Initialisation -------------------------------------------------------

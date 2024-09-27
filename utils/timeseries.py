@@ -5,6 +5,8 @@ Author: Jaime Ruiz Serra
 Date:   2024-09-19
 '''
 
+import logging
+
 import numpy as np
 from scipy.spatial import ConvexHull
 
@@ -163,7 +165,7 @@ def permute_agents(
     if closest_vertex_idx != 0:
         last_perm = perms.pop()
         trajectory[:, list(perms[0])] = trajectory[:, list(last_perm)].copy()
-        print(f'Permuting agents: {last_perm}')
+        logging.debug(f'Permuting agents: {last_perm}')
         return permute_agents(
             trajectory, 
             t_check=t_check,

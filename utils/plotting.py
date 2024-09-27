@@ -129,7 +129,7 @@ def make_default_config(variables_history):
             )
 
     (
-        ambiguity,   # each of shape (num_actions**policy_length, policy_length)
+        ambiguity,   # each of shape (T, num_actions**policy_length, policy_length)
         risk, 
         salience, 
         pragmatic_value, 
@@ -794,10 +794,10 @@ def plot_vfe_ensemble(vfe_history, energy_history, complexity_history, entropy_h
 def plot_expected_efe_ensemble(
         q_u_history,
         efe_history,
-        pragmatic_value_history,
-        salience_history,
         risk_history,
         ambiguity_history,
+        salience_history,
+        pragmatic_value_history,
         novelty_history,
         ax,
         ):

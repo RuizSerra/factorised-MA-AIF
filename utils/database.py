@@ -5,6 +5,7 @@ Author: Jaime Ruiz Serra
 Date:   2024-09-20
 '''
 
+import logging
 import pickle
 import sqlite3
 import numpy as np
@@ -116,7 +117,7 @@ def retrieve_timeseries_matching_metadata(
 
     metadata = retrieve_timeseries_matching(sql_query=sql_query, db_path=db_path)
     assert len(metadata) > 0, f"No matches for '{sql_query}' in the {db_path} database"
-    print(f"Found {len(metadata)} matches for '{sql_query}' in the {db_path} database")
+    logging.info(f"Found {len(metadata)} matches for '{sql_query}' in the {db_path} database")
 
     experiments = pd.DataFrame()
     for idx in range(len(metadata)):

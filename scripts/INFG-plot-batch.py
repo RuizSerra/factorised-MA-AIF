@@ -40,7 +40,9 @@ if __name__ == '__main__':
     argparser.add_argument('--n-clusters', type=int, default=6)
 
     args = argparser.parse_args()
-
+    
+    logging.basicConfig(level=logging.INFO)
+    
     metadata = utils.database.retrieve_timeseries_matching(
         db_path=args.db_path,
         sql_query=(
