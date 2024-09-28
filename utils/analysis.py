@@ -14,6 +14,18 @@ from jpype import startJVM, getDefaultJVMPath, isJVMStarted
 
 import os
 from jpype import startJVM, isJVMStarted, getDefaultJVMPath
+import matplotlib.pyplot as plt
+
+
+# Plot setting
+plt.rcParams['font.family'] = 'serif'
+plt.rcParams['font.serif'] = 'cmr10'  # Use the Computer Modern Roman font
+plt.rcParams['mathtext.fontset'] = 'cm'  # Use Computer Modern for math text
+plt.rcParams['axes.formatter.use_mathtext'] = True
+plt.rcParams['axes.labelsize'] = 16  # Axis labels
+plt.rcParams['axes.titlesize'] = 20  # Title
+plt.rcParams['xtick.labelsize'] = 14 # X tick labels
+plt.rcParams['ytick.labelsize'] = 14 # Y tick labels
 
 def initialize_jvm(jidt_dir=None, max_memory="4024M"):
     # Check if the JIDT directory is provided
@@ -37,8 +49,6 @@ def initialize_jvm(jidt_dir=None, max_memory="4024M"):
             convertStrings=True
         )
 
-import numpy as np
-import pandas as pd
 
 def extract_history(variables_history):
     """
@@ -514,16 +524,16 @@ def plot_entropy_heatmap_single(entropy_measures_df, output_path=None):
     ax = plt.subplot(gs[0])
     sns.heatmap(pivot_table, cmap=cmap, cbar=False, ax=ax, linewidths=0)
 
-    # Set axis labels and title
-    ax.set_xlabel('Time', fontsize=20, labelpad=10)
-    ax.set_ylabel('Agent', fontsize=20, labelpad=10)
-    ax.set_title('Marginal Entropy', fontsize=24, pad=15)
+    # Set axis labels and title using the updated font settings
+    ax.set_xlabel('Time', labelpad=10)
+    ax.set_ylabel('Agent', labelpad=10)
+    ax.set_title('Marginal Entropy', pad=15)
 
     # Ticks and labels
     ax.set_yticks(np.arange(len(pivot_table.index)) + 0.5)
-    ax.set_yticklabels(pivot_table.index, fontsize=16)
+    ax.set_yticklabels(pivot_table.index)
     ax.xaxis.set_major_locator(MaxNLocator(integer=True, prune='both', nbins=6))
-    ax.set_xticklabels([int(tick) for tick in ax.get_xticks()], fontsize=16)
+    ax.set_xticklabels([int(tick) for tick in ax.get_xticks()])
 
     # Colorbar
     cbar_ax = plt.subplot(gs[1])
@@ -531,7 +541,7 @@ def plot_entropy_heatmap_single(entropy_measures_df, output_path=None):
     sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
     sm.set_array([])
     cbar = plt.colorbar(sm, cax=cbar_ax)
-    cbar.ax.tick_params(labelsize=16)
+    cbar.ax.tick_params(labelsize=14)
     cbar.set_label('Entropy (Bits)', size=18)
 
     # Adjust layout
@@ -693,6 +703,17 @@ def entropy(data, action_suffix='_action'):
     - data: pandas DataFrame containing the data.
     - action_suffix: suffix used to identify action columns.
     """
+
+    # Plot setting
+    plt.rcParams['font.family'] = 'serif'
+    plt.rcParams['font.serif'] = 'cmr10'  # Use the Computer Modern Roman font
+    plt.rcParams['mathtext.fontset'] = 'cm'  # Use Computer Modern for math text
+    plt.rcParams['axes.formatter.use_mathtext'] = True
+    plt.rcParams['axes.labelsize'] = 16  # Axis labels
+    plt.rcParams['axes.titlesize'] = 20  # Title
+    plt.rcParams['xtick.labelsize'] = 14 # X tick labels
+    plt.rcParams['ytick.labelsize'] = 14 # Y tick labels
+
     # Calculate entropy
     entropy_measures_df = calculate_entropy_discrete(data, action_suffix)
 
@@ -2446,6 +2467,7 @@ def entropy_cont(data, action_suffix='_action'):
     - data: pandas DataFrame containing the data.
     - action_suffix: suffix used to identify action columns.
     """
+
     # Calculate continuous entropy
     entropy_measures_df = calculate_entropy_continuous(data, action_suffix)
 
@@ -3844,372 +3866,374 @@ def predictive_information_cont(data, action_suffix='_action', past_window=1, fu
         plot_pi_heatmap(aggregated_df)
 
 
-
-
-# # ======================================================================================================================================================
-# # ENTROPY RATE (DISCRETE)
-# # ======================================================================================================================================================
-
-# import pandas as pd
-# import numpy as np
-# import matplotlib.pyplot as plt
-# import seaborn as sns
-# from matplotlib import gridspec
-# from matplotlib.ticker import MaxNLocator
-# import os
-
-# def calculate_base(actions):
-#     """
-#     Calculates the base for entropy rate as the number of unique distinct actions.
-
-#     Parameters:
-#     - actions: pandas Series containing action data.
-
-#     Returns:
-#     - Integer representing the base.
-#     """
-#     unique_actions = np.unique(actions.dropna().astype(int))  # Ensure no NaN values
-#     base = len(unique_actions)
-#     print(base)
-#     return base
-
-# def entropy_rate_discrete(data, variable, base, history=1):
-#     """
-#     Calculate discrete entropy rate for a single variable.
-
-#     Parameters:
-#     - data: pandas DataFrame containing the data.
-#     - variable: column name for which to calculate entropy rate.
-#     - base: base for the discrete variables.
-#     - history: history length for conditioning, default is 1.
-
-#     Returns:
-#     - DataFrame with Entropy Rate (Bits) per timestep.
-#     """
-#     data_clean = data.replace([np.inf, -np.inf], np.nan).dropna(subset=[variable])
-#     train = data_clean[variable].values.astype(int)
-#     print(train)
-
-#     # Ensure the base is valid
-#     if base < 2:
-#         raise ValueError(f"Base must be >= 2. Invalid base: {base}")
-
-#     # Ensure the data is 1-dimensional
-#     if len(train.shape) != 1:
-#         raise ValueError(f"Data should be 1-dimensional, but got shape: {train.shape}")
-
-#     # Set up the entropy rate calculator
-#     calcClass = JPackage("infodynamics.measures.discrete").EntropyRateCalculatorDiscrete
-#     calc = calcClass(base, history)
-
-#     # Initialize the calculator with the specified history length
-#     calc.initialise(base)
-
-#     # Add observations (check if the array is non-empty)
-#     if len(train) == 0:
-#         raise ValueError("No valid observations in the data to add.")
-
-#     calc.addObservations(train.tolist())
-
-#     # Calculate entropy rate results
-#     local_result_nats = calc.computeLocalFromPreviousObservations(train)
-
-#     # Convert nats to bits
-#     local_result_bits = np.array(local_result_nats) / np.log(2)
-
-#     # Return DataFrame
-#     return pd.DataFrame({'Entropy_Rate_Bits': local_result_bits})
-
-# def calculate_entropy_rate_discrete(data, action_suffix='_action', history=2):
-#     """
-#     Calculate entropy rate for each agent's actions. Handles both single runs and multiple repeats.
-
-#     Parameters:
-#     - data: pandas DataFrame containing the data.
-#     - action_suffix: suffix used to identify action columns.
-#     - history: history length for entropy rate calculation.
-
-#     Returns:
-#     - If 'Repeat' is not in data:
-#         - DataFrame with columns ['Entropy_Rate_Bits', 'Agent', 'Timestep']
-#       If 'Repeat' is in data:
-#         - DataFrame with columns ['Agent', 'Timestep', 'Mean_Entropy_Rate', 'Std_Error']
-#     """
-#     action_columns = [col for col in data.columns if col.endswith(action_suffix)]
-#     result_df_list = []
-
-#     if 'Repeat' in data.columns:
-#         # Multiple runs: Calculate entropy rate for each repeat
-#         grouped = data.groupby('Repeat')
-#         for repeat, group in grouped:
-#             for agent_col in action_columns:
-#                 # Extract agent number (assuming format like 'agent_1_action')
-#                 agent_number = agent_col.split('_')[1]
-
-#                 # Calculate the base for this agent's actions
-#                 base = calculate_base(group[agent_col])
-
-#                 # Skip this agent if base is invalid
-#                 if base < 2:
-#                     continue  # Skip this agent, or handle it differently
-
-#                 # Calculate local entropy rate
-#                 local_entropy_rate_df = entropy_rate_discrete(group, agent_col, base, history)
-
-#                 # Append agent number and timestep values
-#                 local_entropy_rate_df['Agent'] = agent_number
-#                 local_entropy_rate_df['Timestep'] = group['Timestep'].values[:len(local_entropy_rate_df)]
-#                 local_entropy_rate_df['Repeat'] = repeat
-#                 result_df_list.append(local_entropy_rate_df)
-
-#         # Combine all results into a single DataFrame
-#         combined_df = pd.concat(result_df_list, ignore_index=True)
-
-#         # Calculate mean and standard error across repeats
-#         aggregated_df = combined_df.groupby(['Agent', 'Timestep']).agg(
-#             Mean_Entropy_Rate=('Entropy_Rate_Bits', 'mean'),
-#             Std_Error=('Entropy_Rate_Bits', 'sem')
-#         ).reset_index()
-
-#         return aggregated_df
-#     else:
-#         # Single run: Calculate entropy rate normally
-#         for agent_col in action_columns:
-#             # Extract agent number
-#             agent_number = agent_col.split('_')[1]
-
-#             # Calculate the base for this agent's actions
-#             base = calculate_base(data[agent_col])
-
-#             # Skip this agent if base is invalid
-#             if base < 2:
-#                 continue  # Skip this agent, or handle it differently
-
-#             # Calculate local entropy rate
-#             local_entropy_rate_df = entropy_rate_discrete(data, agent_col, base, history)
-
-#             # Append agent number and timestep values
-#             local_entropy_rate_df['Agent'] = agent_number
-#             local_entropy_rate_df['Timestep'] = data['Timestep'].values[:len(local_entropy_rate_df)]
-#             result_df_list.append(local_entropy_rate_df)
-
-#         # Combine all results into a single DataFrame
-#         return pd.concat(result_df_list, ignore_index=True)
-
-# def plot_entropy_rate_heatmap(entropy_rate_measures_df, output_path=None):
-#     """
-#     Plot a heatmap or line graphs for the entropy rate values based on the DataFrame structure.
-
-#     Parameters:
-#     - entropy_rate_measures_df: pandas DataFrame containing entropy rate measures.
-#     - output_path: Optional; path to save the plot (without extension).
-#     """
-#     if {'Mean_Entropy_Rate', 'Std_Error'}.issubset(entropy_rate_measures_df.columns):
-#         # Data has 'Repeat' column: Plot average entropy rate with standard error as separate subplots
-#         plot_entropy_rate_linegraphs_subplots(entropy_rate_measures_df, output_path)
-#     else:
-#         # Single run: Plot heatmap
-#         plot_entropy_rate_heatmap_single(entropy_rate_measures_df, output_path)
-
-# def plot_entropy_rate_heatmap_single(entropy_rate_measures_df, output_path=None):
-#     """
-#     Plot a heatmap for the entropy rate values (single run).
-
-#     Parameters:
-#     - entropy_rate_measures_df: pandas DataFrame containing entropy rate measures.
-#     - output_path: Optional; path to save the plot (without extension).
-#     """
-#     # Create a pivot table for heatmap plotting
-#     pivot_table = entropy_rate_measures_df.pivot_table(
-#         index='Agent',
-#         columns='Timestep',
-#         values='Entropy_Rate_Bits',
-#         aggfunc='mean'
-#     )
-
-#     # Set up colormap and gridspec for plotting
-#     cmap = sns.color_palette("viridis", as_cmap=True)
-#     fig = plt.figure(figsize=(10, 8), dpi=300)
-#     gs = gridspec.GridSpec(1, 2, width_ratios=[20, 1])  # Ratio of heatmap and colorbar
-
-#     # Heatmap
-#     ax = plt.subplot(gs[0])
-#     sns.heatmap(pivot_table, cmap=cmap, cbar=False, ax=ax, linewidths=0)
-
-#     # Set axis labels and title
-#     ax.set_xlabel('Time', fontsize=20, labelpad=10)
-#     ax.set_ylabel('Agent', fontsize=20, labelpad=10)
-#     ax.set_title('Marginal Entropy Rate', fontsize=24, pad=15)
-
-#     # Ticks and labels
-#     ax.set_yticks(np.arange(len(pivot_table.index)) + 0.5)
-#     ax.set_yticklabels(pivot_table.index, fontsize=16)
-#     ax.xaxis.set_major_locator(MaxNLocator(integer=True, prune='both', nbins=6))
-#     ax.set_xticklabels([int(tick) for tick in ax.get_xticks()], fontsize=16)
-
-#     # Colorbar
-#     cbar_ax = plt.subplot(gs[1])
-#     norm = plt.Normalize(vmin=pivot_table.values.min(), vmax=pivot_table.values.max())
-#     sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
-#     sm.set_array([])
-#     cbar = plt.colorbar(sm, cax=cbar_ax)
-#     cbar.ax.tick_params(labelsize=16)
-#     cbar.set_label('Entropy Rate (Bits)', size=18)
-
-#     # Adjust layout
-#     plt.tight_layout(rect=[0, 0, 1, 0.95])
-
-#     # Save the figure
-#     if output_path is not None:
-#         plt.savefig(f'{output_path}.pdf', format='pdf', bbox_inches='tight')
-#         plt.savefig(f'{output_path}.png', format='png', dpi=300, bbox_inches='tight')
-
-#     # Show plot
-#     plt.show()
-
-# def plot_entropy_rate_linegraphs_subplots(
-#     aggregated_df, 
-#     output_path=None, 
-#     use_savgol=True,
-#     savgol_window=21,
-#     savgol_polyorder=2
-# ):
-#     """
-#     Plot separate line graphs for each agent showing average entropy rate with standard error shading.
-
-#     Parameters:
-#     - aggregated_df: pandas DataFrame containing ['Agent', 'Timestep', 'Mean_Entropy_Rate', 'Std_Error']
-#     - output_path: Optional; path to save the plot (without extension).
-#     - use_savgol: Boolean; if True, apply Savitzky-Golay filter to smooth the data.
-#     - savgol_window: Window length for Savitzky-Golay filter (must be a positive odd integer and <= number of data points).
-#     - savgol_polyorder: Polynomial order for Savitzky-Golay filter (must be less than savgol_window).
-#     """
-#     agents = aggregated_df['Agent'].unique()
-#     num_agents = len(agents)
-
-#     # Define figure size: width proportional to number of agents, height fixed
-#     width_per_agent = 6
-#     height = 6
-#     total_width = width_per_agent * num_agents
-#     sns.set(style="whitegrid")
-
-#     # Create a subplot for each agent
-#     fig, axes = plt.subplots(
-#         1, num_agents, 
-#         figsize=(width_per_agent * num_agents, height), 
-#         sharey=True
-#     )
-
-#     # If only one agent, axes is not a list
-#     if num_agents == 1:
-#         axes = [axes]
-
-#     # Define a color palette
-#     palette = sns.color_palette("viridis", n_colors=num_agents)
-#     color_dict = dict(zip(agents, palette))
-
-#     for ax, agent in zip(axes, agents):
-#         agent_data = aggregated_df[aggregated_df['Agent'] == agent].sort_values('Timestep')
-
-#         # Original timesteps and data
-#         x = agent_data['Timestep'].values
-#         y = agent_data['Mean_Entropy_Rate'].values
-#         y_err = agent_data['Std_Error'].values
-
-#         if use_savgol:
-#             # Validate Savitzky-Golay parameters
-#             if savgol_window % 2 == 0 or savgol_window <= 0:
-#                 warnings.warn(
-#                     f"Agent {agent}: Savitzky-Golay window size must be a positive odd integer. "
-#                     f"Received window={savgol_window}. Skipping Savitzky-Golay filtering."
-#                 )
-#                 y_smooth = y
-#                 y_err_smooth = y_err
-#             elif savgol_window > len(x):
-#                 warnings.warn(
-#                     f"Agent {agent}: Savitzky-Golay window size ({savgol_window}) is larger than the number of data points ({len(x)}). "
-#                     f"Skipping Savitzky-Golay filtering."
-#                 )
-#                 y_smooth = y
-#                 y_err_smooth = y_err
-#             elif savgol_polyorder >= savgol_window:
-#                 warnings.warn(
-#                     f"Agent {agent}: Savitzky-Golay polyorder ({savgol_polyorder}) must be less than window size ({savgol_window}). "
-#                     f"Skipping Savitzky-Golay filtering."
-#                 )
-#                 y_smooth = y
-#                 y_err_smooth = y_err
-#             else:
-#                 try:
-#                     # Apply Savitzky-Golay filter
-#                     y_smooth = savgol_filter(y, window_length=savgol_window, polyorder=savgol_polyorder)
-#                     y_err_smooth = savgol_filter(y_err, window_length=savgol_window, polyorder=savgol_polyorder)
-#                 except Exception as e:
-#                     warnings.warn(
-#                         f"Agent {agent}: Savitzky-Golay filtering failed with error: {e}. "
-#                         f"Skipping Savitzky-Golay filtering."
-#                     )
-#                     y_smooth = y
-#                     y_err_smooth = y_err
-#         else:
-#             # No smoothing; use original data
-#             y_smooth = y
-#             y_err_smooth = y_err
-
-#         # Plot the mean entropy rate with a thinner line
-#         ax.plot(
-#             x,
-#             y_smooth,
-#             label=f'Agent {agent}',
-#             color=color_dict[agent],
-#             linewidth=1  # Thinner lines
-#         )
-
-#         # Shade the standard error with adjusted transparency
-#         ax.fill_between(
-#             x,
-#             y_smooth - y_err_smooth,
-#             y_smooth + y_err_smooth,
-#             color=color_dict[agent],
-#             alpha=0.2  # Increased alpha for better visibility
-#         )
-
-#         ax.set_title(f'Agent {agent}', fontsize=18)
-#         ax.set_xlabel('Time', fontsize=16)
-#         if ax == axes[0]:
-#             ax.set_ylabel('Entropy Rate (Bits)', fontsize=16)
-#         else:
-#             ax.set_ylabel('')
-#         ax.tick_params(axis='both', which='major', labelsize=14)
-#         ax.legend().set_visible(False)  # Hide individual legends
-
-#     # Create a single legend for all subplots
-#     handles = [plt.Line2D([0], [0], color=color_dict[agent], lw=2) for agent in agents]
-#     labels = [f'Agent {agent}' for agent in agents]
-#     fig.legend(handles, labels, loc='upper right', fontsize=16, title='Agents', title_fontsize=18)
-
-#     plt.suptitle('Average Marginal Entropy Rate with Standard Error', fontsize=20, y=0.95)
-#     plt.tight_layout(rect=[0, 0, 1, 0.92])
-
-#     # Save the figure
-#     if output_path is not None:
-#         plt.savefig(f'{output_path}.pdf', format='pdf', bbox_inches='tight')
-#         plt.savefig(f'{output_path}.png', format='png', dpi=300, bbox_inches='tight')
-
-#     # Show plot
-#     plt.show()
-
-# def entropy_rate(data, action_suffix='_action', history=3):
-#     """
-#     Main function to calculate and plot entropy rate heatmap or line graphs based on the presence of 'Repeat' column.
-
-#     Parameters:
-#     - data: pandas DataFrame containing the data.
-#     - action_suffix: suffix used to identify action columns.
-#     - history: history length for entropy rate calculation.
-#     """
-#     # Calculate entropy rate
-#     entropy_rate_measures_df = calculate_entropy_rate_discrete(data, action_suffix, history)
-
-#     # Plot heatmap or line graphs based on data structure
-#     plot_entropy_rate_heatmap(entropy_rate_measures_df)
+# ======================================================================================================================================================
+# TOTAL CORRELATION CALCULATION: SUM OF MARGINAL ENTROPIES MINUS JOINT ENTROPY
+# ======================================================================================================================================================
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from matplotlib import gridspec
+from matplotlib.ticker import MaxNLocator
+import warnings
+from scipy.signal import savgol_filter
+
+# Import your existing entropy functions
+# Ensure that these functions are defined in your project as per your initial code
+# from your_entropy_module import entropy_continuous, entropy_continuous_multivariate
+
+# ======================================================================================================================================================
+# TOTAL CORRELATION FUNCTIONS
+# ======================================================================================================================================================
+
+def calculate_total_correlation(data, action_suffix='_action'):
+    """
+    Calculate Total Correlation as the sum of marginal entropies minus joint entropy.
+    Handles both single runs and multiple repeats.
+
+    Parameters:
+    - data: pandas DataFrame containing the data.
+    - action_suffix: suffix used to identify action columns.
+
+    Returns:
+    - If 'Repeat' is in data:
+        - DataFrame with columns ['Timestep', 'Mean_Total_Correlation', 'Std_Error']
+      Otherwise:
+        - DataFrame with columns ['Timestep', 'Total_Correlation']
+    """
+    action_columns = [col for col in data.columns if col.endswith(action_suffix)]
+    result_df_list = []
+
+    if 'Repeat' in data.columns:
+        # Multiple runs: Calculate total correlation for each repeat
+        grouped = data.groupby('Repeat')
+        for repeat, group in grouped:
+            # Ensure the group is sorted by Timestep
+            group_sorted = group.sort_values('Timestep')
+
+            # Calculate marginal entropies for each agent
+            marginal_entropies = {}
+            for agent_col in action_columns:
+                try:
+                    agent_number = agent_col.split('_')[1]
+                except IndexError:
+                    warnings.warn(
+                        f"Agent column '{agent_col}' does not follow the expected format 'agent_X_action'. Skipping."
+                    )
+                    continue
+
+                entropy_df = entropy_continuous(group_sorted, agent_col)
+                if entropy_df is not None and not entropy_df.empty:
+                    marginal_entropies[agent_number] = entropy_df['Entropy_Bits'].values
+                else:
+                    warnings.warn(
+                        f"Entropy calculation returned empty for Agent {agent_number} in Repeat {repeat}."
+                    )
+                    marginal_entropies[agent_number] = np.zeros(len(group_sorted))
+
+            if not marginal_entropies:
+                warnings.warn(f"No valid marginal entropies calculated for Repeat {repeat}. Skipping.")
+                continue
+
+            # Sum of marginal entropies per timestep
+            sum_marginals = np.sum(np.column_stack(list(marginal_entropies.values())), axis=1)
+
+            # Calculate joint entropy
+            joint_entropy = entropy_continuous_multivariate(group_sorted, action_columns)
+            if joint_entropy is None:
+                warnings.warn(f"Joint entropy calculation returned None for Repeat {repeat}. Skipping.")
+                continue
+
+            # Ensure sum_marginals and joint_entropy have the same length
+            min_length = min(len(sum_marginals), len(joint_entropy))
+            sum_marginals = sum_marginals[:min_length]
+            joint_entropy = joint_entropy[:min_length]
+
+            # Calculate Total Correlation
+            total_correlation = sum_marginals - joint_entropy
+
+            # Create a DataFrame for the total correlation values
+            total_corr_df = pd.DataFrame({
+                'Total_Correlation': total_correlation,
+                'Timestep': group_sorted['Timestep'].values[:min_length],
+                'Repeat': repeat
+            })
+            result_df_list.append(total_corr_df)
+
+        if not result_df_list:
+            warnings.warn("No valid total correlation calculations were performed due to incorrect column naming or empty data.")
+            return pd.DataFrame()
+
+        # Combine all results into a single DataFrame
+        combined_df = pd.concat(result_df_list, ignore_index=True)
+
+        # Calculate mean and standard error across repeats for each timestep
+        aggregated_df = combined_df.groupby('Timestep').agg(
+            Mean_Total_Correlation=('Total_Correlation', 'mean'),
+            Std_Error=('Total_Correlation', 'sem')
+        ).reset_index()
+
+        return aggregated_df
+    else:
+        # Single run: Calculate total correlation normally
+        # Sort by Timestep
+        data_sorted = data.sort_values('Timestep')
+
+        # Calculate marginal entropies for each agent
+        marginal_entropies = {}
+        for agent_col in action_columns:
+            try:
+                agent_number = agent_col.split('_')[1]
+            except IndexError:
+                warnings.warn(
+                    f"Agent column '{agent_col}' does not follow the expected format 'agent_X_action'. Skipping."
+                )
+                continue
+
+            entropy_df = entropy_continuous(data_sorted, agent_col)
+            if entropy_df is not None and not entropy_df.empty:
+                marginal_entropies[agent_number] = entropy_df['Entropy_Bits'].values
+            else:
+                warnings.warn(
+                    f"Entropy calculation returned empty for Agent {agent_number}."
+                )
+                marginal_entropies[agent_number] = np.zeros(len(data_sorted))
+
+        if not marginal_entropies:
+            warnings.warn("No valid marginal entropies calculated.")
+            return pd.DataFrame()
+
+        # Sum of marginal entropies per timestep
+        sum_marginals = np.sum(np.column_stack(list(marginal_entropies.values())), axis=1)
+
+        # Calculate joint entropy
+        joint_entropy = entropy_continuous_multivariate(data_sorted, action_columns)
+        if joint_entropy is None:
+            warnings.warn("Joint entropy calculation returned None.")
+            return pd.DataFrame()
+
+        # Ensure sum_marginals and joint_entropy have the same length
+        min_length = min(len(sum_marginals), len(joint_entropy))
+        sum_marginals = sum_marginals[:min_length]
+        joint_entropy = joint_entropy[:min_length]
+
+        # Calculate Total Correlation
+        total_correlation = sum_marginals - joint_entropy
+
+        # Create a DataFrame for the total correlation values
+        total_corr_df = pd.DataFrame({
+            'Total_Correlation': total_correlation,
+            'Timestep': data_sorted['Timestep'].values[:min_length]
+        })
+
+        return total_corr_df
+
+
+def plot_total_correlation(total_corr_df):
+    """
+    Plots Total Correlation based on the DataFrame structure.
+
+    Parameters:
+    - total_corr_df: pandas DataFrame containing total correlation measures.
+      - If 'Mean_Total_Correlation' and 'Std_Error' are present: plots average with standard error.
+      - Else: plots heatmap.
+    """
+    if total_corr_df.empty:
+        warnings.warn("Total correlation DataFrame is empty. No plots will be generated.")
+        return
+
+    if {'Mean_Total_Correlation', 'Std_Error'}.issubset(total_corr_df.columns):
+        # Data has multiple repeats: Plot average total correlation with standard error
+        plot_total_correlation_linegraph(total_corr_df)
+    else:
+        # Single run: Plot heatmap
+        plot_total_correlation_heatmap(total_corr_df)
+
+
+def plot_total_correlation_heatmap(total_corr_df):
+    """
+    Plot a heatmap for the total correlation values (single run).
+
+    Parameters:
+    - total_corr_df: pandas DataFrame containing total correlation measures.
+    """
+    if total_corr_df.empty:
+        warnings.warn("No data available to plot the heatmap.")
+        return
+
+    # Create a pivot table for heatmap plotting
+    # Since Total Correlation is a single value per timestep, represent it as a heatmap with one row
+    pivot_table = total_corr_df.pivot_table(
+        index=['Total_Correlation'],
+        columns='Timestep',
+        values='Total_Correlation',
+        aggfunc='mean'
+    )
+
+    if pivot_table.empty:
+        warnings.warn("Pivot table is empty. Check your data.")
+        return
+
+    # Define a custom colormap
+    cmap = sns.color_palette("viridis", as_cmap=True)
+
+    # Create a gridspec layout to control the colorbar and heatmap separately
+    fig = plt.figure(figsize=(12, 2), dpi=300)  # Wide and not very tall
+    gs = gridspec.GridSpec(1, 2, width_ratios=[20, 1])  # 20:1 ratio between heatmap and colorbar
+
+    # Heatmap
+    ax = plt.subplot(gs[0])
+    sns.heatmap(pivot_table, cmap=cmap, cbar=False, ax=ax, linewidths=0)
+
+    # Set axis labels and title
+    ax.set_xlabel('Time', fontsize=14, labelpad=10)
+    ax.set_ylabel('Total Correlation', fontsize=14, labelpad=10)
+    ax.set_title('Total Correlation Heatmap', fontsize=16, pad=15)
+
+    # Ticks and labels
+    ax.set_yticks([])  # Hide y-ticks since it's a single row
+    ax.xaxis.set_major_locator(MaxNLocator(integer=True, prune='both', nbins=10))
+    ax.set_xticklabels([int(tick) for tick in ax.get_xticks()], fontsize=12)
+
+    # Colorbar
+    cbar_ax = plt.subplot(gs[1])
+    norm = plt.Normalize(vmin=pivot_table.values.min(), vmax=pivot_table.values.max())
+    sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+    sm.set_array([])
+    cbar = plt.colorbar(sm, cax=cbar_ax)
+    cbar.ax.tick_params(labelsize=12)
+    cbar.set_label('Total Correlation (Bits)', size=14)
+
+    # Adjust layout
+    plt.tight_layout(rect=[0, 0, 1, 0.95])
+
+    # Show plot
+    plt.show()
+
+
+def plot_total_correlation_linegraph(aggregated_df, use_savgol=True, savgol_window=21, savgol_polyorder=3):
+    """
+    Plots a line graph of average total correlation with standard error shading,
+    with optional Savitzky-Golay smoothing for smoother lines.
+
+    Parameters:
+    - aggregated_df: pandas DataFrame containing ['Timestep', 'Mean_Total_Correlation', 'Std_Error']
+    - use_savgol: Boolean; if True, apply Savitzky-Golay filter to smooth the data.
+    - savgol_window: Window length for Savitzky-Golay filter (must be a positive odd integer and <= number of data points).
+    - savgol_polyorder: Polynomial order for Savitzky-Golay filter (must be less than savgol_window).
+    """
+    if aggregated_df.empty:
+        warnings.warn("Aggregated DataFrame is empty. No plots will be generated.")
+        return
+
+    # Sort DataFrame by 'Timestep'
+    aggregated_df = aggregated_df.sort_values('Timestep')
+
+    # Extract data
+    x = aggregated_df['Timestep'].values
+    y = aggregated_df['Mean_Total_Correlation'].values
+    y_err = aggregated_df['Std_Error'].values
+
+    # Apply Savitzky-Golay filter if enabled
+    if use_savgol:
+        # Validate Savitzky-Golay parameters
+        if savgol_window % 2 == 0 or savgol_window <= 0:
+            warnings.warn(
+                f"Savitzky-Golay window size must be a positive odd integer. "
+                f"Received window={savgol_window}. Skipping Savitzky-Golay filtering."
+            )
+            y_smooth = y
+            y_err_smooth = y_err
+        elif savgol_window > len(x):
+            warnings.warn(
+                f"Savitzky-Golay window size ({savgol_window}) is larger than the number of data points ({len(x)}). "
+                f"Skipping Savitzky-Golay filtering."
+            )
+            y_smooth = y
+            y_err_smooth = y_err
+        elif savgol_polyorder >= savgol_window:
+            warnings.warn(
+                f"Savitzky-Golay polyorder ({savgol_polyorder}) must be less than window size ({savgol_window}). "
+                f"Skipping Savitzky-Golay filtering."
+            )
+            y_smooth = y
+            y_err_smooth = y_err
+        else:
+            try:
+                # Apply Savitzky-Golay filter
+                y_smooth = savgol_filter(y, window_length=savgol_window, polyorder=savgol_polyorder)
+                y_err_smooth = savgol_filter(y_err, window_length=savgol_window, polyorder=savgol_polyorder)
+            except Exception as e:
+                warnings.warn(
+                    f"Savitzky-Golay filtering failed with error: {e}. Skipping Savitzky-Golay filtering."
+                )
+                y_smooth = y
+                y_err_smooth = y_err
+    else:
+        # No smoothing; use original data
+        y_smooth = y
+        y_err_smooth = y_err
+
+    # Initialize the plot
+    plt.figure(figsize=(10, 6), dpi=300)
+    sns.set(style="whitegrid")
+
+    # Define color palette
+    color = sns.color_palette("viridis", 1)[0]
+
+    # Plot mean total correlation line
+    plt.plot(
+        x,
+        y_smooth,
+        label='Mean Total Correlation',
+        color=color,
+        linewidth=2
+    )
+
+    # Plot standard error shading
+    plt.fill_between(
+        x,
+        y_smooth - y_err_smooth,
+        y_smooth + y_err_smooth,
+        color=color,
+        alpha=0.3,
+        label='Standard Error'
+    )
+
+    # Set labels and title
+    plt.xlabel('Time', fontsize=16)
+    plt.ylabel('Total Correlation (Bits)', fontsize=16)
+    plt.title('Average Total Correlation Over Time with Standard Error', fontsize=18)
+
+    # Customize ticks
+    plt.xticks(fontsize=14)
+    plt.yticks(fontsize=14)
+
+    # Add legend
+    plt.legend(fontsize=14)
+
+    # Adjust layout for a clean look
+    plt.tight_layout()
+
+    # Show plot
+    plt.show()
+
+
+def total_correlation_cont(data, action_suffix='_action'):
+    """
+    Main function to calculate and plot total correlation heatmap or line graph based on the presence of 'Repeat' column.
+
+    Parameters:
+    - data: pandas DataFrame containing the data.
+    - action_suffix: Suffix used to identify action columns.
+    """
+    # Calculate total correlation
+    total_corr_df = calculate_total_correlation(data, action_suffix)
+
+    if total_corr_df.empty:
+        warnings.warn("Total correlation calculation returned an empty DataFrame. No plots will be generated.")
+        return
+
+    # Plot heatmap or line graph based on data structure
+    plot_total_correlation(total_corr_df)
