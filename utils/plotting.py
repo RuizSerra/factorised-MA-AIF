@@ -263,9 +263,10 @@ def plot_vfe(
     ax.set_title(f'VFE Agent {chr(105+i)}', fontsize=label_font_size)
     ax.set_xlabel('Time step (t)', fontsize=label_font_size)
     # ylim range based on all agents (not just the current agent i)
-    ax.set_ylim(
-        (1-MARGIN)*vfe_history[t_min:t_max].sum(axis=2).min(), 
-        (1+MARGIN)*vfe_history[t_min:t_max].sum(axis=2).max())
+    ymin = vfe_history[t_min:t_max].sum(axis=2).min()
+    ymax = vfe_history[t_min:t_max].sum(axis=2).max()
+    margin = MARGIN * (ymax - ymin)
+    ax.set_ylim(ymin - margin, ymax + margin)
     if not ONLY_LEFT_Y_LABEL or (ONLY_LEFT_Y_LABEL and i == 0):
         ax.set_ylabel('VFE', color='black', fontsize=label_font_size)
         ax2.set_ylabel('Nats', fontsize=label_font_size)
@@ -360,9 +361,10 @@ def plot_efe(
     ax.set_title(f'EFE Agent {chr(105+i)}', fontsize=label_font_size)
     ax.set_xlabel('Time step (t)', fontsize=label_font_size)
     # ylim range based on all agents (not just the current agent i)
-    ax.set_ylim(
-        (1-MARGIN)*efe_history[t_min:t_max].min(), 
-        (1+MARGIN)*efe_history[t_min:t_max].max())
+    ymin = efe_history[t_min:t_max].min()
+    ymax = efe_history[t_min:t_max].max()
+    margin = MARGIN * (ymax - ymin)
+    ax.set_ylim(ymin - margin, ymax + margin)
     if not ONLY_LEFT_Y_LABEL or (ONLY_LEFT_Y_LABEL and i == 0):
         ax.set_ylabel('G[u]', color='black', fontsize=label_font_size)
     if SHOW_LEGEND:
@@ -447,9 +449,10 @@ def plot_expected_efe(
     ax.set_title(f'Expected EFE Agent {chr(105+i)}', fontsize=label_font_size)
     ax.set_xlabel('Time step (t)', fontsize=label_font_size)
     # ylim range based on all agents (not just the current agent i)
-    ax.set_ylim(
-        (1-MARGIN)*expected_efe[t_min:t_max].min(), 
-        (1+MARGIN)*expected_efe[t_min:t_max].max())
+    ymin = expected_efe[t_min:t_max].min()
+    ymax = expected_efe[t_min:t_max].max()
+    margin = MARGIN * (ymax - ymin)
+    ax.set_ylim(ymin - margin, ymax + margin)
     if not ONLY_LEFT_Y_LABEL or (ONLY_LEFT_Y_LABEL and i == 0):
         ax.set_ylabel('E[G]', color='black', fontsize=label_font_size)
         if plot_EFE_terms:
@@ -733,9 +736,10 @@ def plot_precision(
     ax.set_title(f'Precision for Agent {chr(105+i)}', fontsize=label_font_size)
     ax.set_xlabel('Time step (t)', fontsize=label_font_size)
     # ylim range based on all agents (not just the current agent i)
-    ax.set_ylim(
-        (1-MARGIN)*gamma_history[t_min:t_max].min(), 
-        (1+MARGIN)*gamma_history[t_min:t_max].max())
+    ymin = gamma_history[t_min:t_max].min()
+    ymax = gamma_history[t_min:t_max].max()
+    margin = MARGIN * (ymax - ymin)
+    ax.set_ylim(ymin - margin, ymax + margin)
     if not ONLY_LEFT_Y_LABEL or (ONLY_LEFT_Y_LABEL and i == 0):
         ax.set_ylabel('Precision', fontsize=label_font_size)
 
