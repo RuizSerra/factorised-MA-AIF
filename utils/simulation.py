@@ -228,7 +228,7 @@ class IteratedGame:
 
     def run(self, 
             T:int, 
-            transition_duration:int=10, 
+            transition_duration:int=200, 
             collect_variables:list=[
                 'VFE', 
                 'energy', 
@@ -323,7 +323,7 @@ class IteratedGame:
                     and 
                     (t < t_transition + transition_duration//2)  # t is before transition end
                 ):
-                l = (t - t_transition) / transition_duration  # Mixing parameter value
+                l = 0.5 + ((t - t_transition) / transition_duration)  # Mixing parameter value
                 for agent in self.agents:
                     agent.set_log_C(     # Linear interpolation of game matrices
                         (1 - l) * self.game_transitions[transition_count][1] 
