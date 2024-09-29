@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 from scipy.stats import dirichlet
 
 DPI = 72
-SHOW_LEGEND = False
+SHOW_LEGEND = True
 ONLY_LEFT_Y_LABEL = False
 TIGHT_LAYOUT = False
 MARGIN = 0.05  # Percentage margin for ylim
@@ -153,7 +153,11 @@ def make_default_config(variables_history):
         {'plot_fn': plot_efe,      
         'args': (
             variables_history['EFE'], 
-            novelty)},
+            risk,
+            ambiguity,
+            pragmatic_value,
+            salience,
+            novelty,)},
         {'plot_fn': plot_expected_efe,      
         'args': (
             variables_history['q_u'],
@@ -235,27 +239,27 @@ def plot_vfe(
     summed_entropy = entropy_history[t_min:t_max, i].sum(axis=1)
     summed_accuracy = accuracy_history[t_min:t_max, i].sum(axis=1)
     
-    ax.plot(
+    vfe_plot = ax.plot(
         x_range, 
         summed_vfe, 
         label='VFE', color=ELBO_COLOR, linestyle='-', linewidth=1.5)
     
     ax2 = ax.twinx()
-    ax2.plot(
+    complexity_plot = ax2.plot(
         x_range, 
         summed_complexity, 
         label='Complexity', 
         color=COMPLEXITY_COLOR, linestyle=':', linewidth=1.2)
-    ax2.plot(
+    energy_plot = ax2.plot(
         x_range, 
         summed_energy, 
         label='Energy', color=ENERGY_COLOR, linestyle=':', linewidth=1.2)
     
-    ax2.plot(
+    accuracy_plot = ax2.plot(
         x_range, 
         -summed_accuracy, 
         label='Accuracy', color=ACCURACY_COLOR, linestyle=':', linewidth=1.2)
-    ax2.plot(
+    entropy_plot = ax2.plot(
         x_range, 
         summed_entropy, 
         label='Entropy', color=ENTROPY_COLOR, linestyle=':', linewidth=1.2)
@@ -271,8 +275,12 @@ def plot_vfe(
         ax.set_ylabel('VFE', color='black', fontsize=label_font_size)
         ax2.set_ylabel('Nats', fontsize=label_font_size)
     if SHOW_LEGEND:
-        ax.legend(loc='upper left')
-        ax2.legend(loc='upper right')
+        # Combine both legends in one box
+        lines = [vfe_plot[0], complexity_plot[0], energy_plot[0], accuracy_plot[0], entropy_plot[0]]
+        labels = [line.get_label() for line in lines]
+        ax.legend(lines, labels)
+        # ax.legend(loc='upper left')
+        # ax2.legend(loc='upper right')
 
 
 def plot_vfe_complexity_energy(vfe_history, energy_history, complexity_history, ax, i):
@@ -337,7 +345,12 @@ def plot_vfe_accuracy_entropy(vfe_history, entropy_history, accuracy_history, ax
 
 
 def plot_efe(
-        efe_history, novelty_history, 
+        efe_history, 
+        risk,
+        ambiguity,
+        pragmatic_value,
+        salience,
+        novelty,
         ax, i, 
         t_min=0, t_max=None
     ):
@@ -345,19 +358,48 @@ def plot_efe(
     t_max = len(efe_history) if t_max is None else t_max
     x_range = range(t_min, t_max)
 
+    # Only plot EFE terms if they are non-zero (i.e. if actual data was provided)
+    # (as a way to stub out the plotting of EFE terms)
+    # FIXME: Use kwargs instead?
+    plot_EFE_terms = (not np.all(risk == 0))
+
+    if plot_EFE_terms:
+        ax2 = ax.twinx()
+
     num_actions = efe_history.shape[-1]
     for a in range(num_actions):
-        ax.plot(
+        efe_plot = ax.plot(
             x_range, 
             efe_history[t_min:t_max, i, a], 
             label=f'G[u={a}]',  color=ACTION_COLORS[a], linewidth=1.2)
         
-        # ax.plot(
-        #     x_range, 
-        #     novelty_history[t_min:t_max, i, a], 
-        #     label=f'Novelty[u={a}]', color=ACTION_COLORS[a], linestyle=':', linewidth=1.2
-        # )
-    
+        if plot_EFE_terms:
+            risk_plot = ax2.plot(
+                x_range, 
+                risk[t_min:t_max, i, a], 
+                label=f'Risk[u={a}]', 
+                color=ACTION_COLORS[a], 
+                linestyle=':', linewidth=1.2, alpha=0.5)
+            ambiguity_plot = ax2.plot(
+                x_range, 
+                ambiguity[t_min:t_max, i, a], 
+                label=f'Ambiguity[u={a}]', 
+                color=ACTION_COLORS[a], 
+                linestyle='--', linewidth=1.2, alpha=0.5)
+            # salience_plot = ax2.plot(
+            #     x_range, 
+            #     -salience[t_min:t_max, i, a], 
+            #     label=f'Salience[u={a}]', color=ACTION_COLORS[a], linestyle=':', linewidth=1.2)
+            # pv_plot = x2.plot(
+            #     x_range, 
+            #     -pragmatic_value[t_min:t_max, i, a], 
+            #     label=f'Pragmatic Value[u={a}]', color=ACTION_COLORS[a], linestyle='--', linewidth=1.2)
+            # novelty_plot = ax.plot(
+            #     x_range, 
+            #     novelty_history[t_min:t_max, i, a], 
+            #     label=f'Novelty[u={a}]', color=ACTION_COLORS[a], linestyle=':', linewidth=1.2
+            # )
+
     ax.set_title(f'EFE Agent {chr(105+i)}', fontsize=label_font_size)
     ax.set_xlabel('Time step (t)', fontsize=label_font_size)
     # ylim range based on all agents (not just the current agent i)
@@ -368,7 +410,12 @@ def plot_efe(
     if not ONLY_LEFT_Y_LABEL or (ONLY_LEFT_Y_LABEL and i == 0):
         ax.set_ylabel('G[u]', color='black', fontsize=label_font_size)
     if SHOW_LEGEND:
-        ax.legend(loc='upper left')
+        # Combine both legends in one box
+        lines = [efe_plot[0], risk_plot[0], ambiguity_plot[0]]
+        labels = [line.get_label() for line in lines]
+        ax.legend(lines, labels)
+        # ax.legend(loc='upper left')
+        # ax2.legend(loc='upper right')
 
 
 def plot_expected_efe(
@@ -410,10 +457,10 @@ def plot_expected_efe(
     summed_ambiguity = weighted_ambiguity[t_min:t_max, i]
     summed_salience = -weighted_salience[t_min:t_max, i]
     summed_pragmatic_value = -weighted_pragmatic_value[t_min:t_max, i]
-    summed_novelty = -weighted_novelty[t_min:t_max, i] if weighted_novelty is not None else None
+    summed_novelty = -weighted_novelty[t_min:t_max, i]
     
     # Plot EFE on the primary y-axis
-    ax.plot(
+    efe_plot = ax.plot(
         x_range, 
         summed_efe, 
         label='E[G]', color=EFE_COLOR, linewidth=1.5)
@@ -421,29 +468,26 @@ def plot_expected_efe(
     if plot_EFE_terms:
         # Create a secondary y-axis for Risk, Ambiguity, Salience, Pragmatic Value, and Novelty)
         ax2 = ax.twinx()
-        ax2.plot(
+        risk_plot = ax2.plot(
             x_range, 
             summed_risk, 
             label='Risk', color=RISK_COLOR, linestyle=':', linewidth=1.2)
-        ax2.plot(
+        ambiguity_plot = ax2.plot(
             x_range, 
             summed_ambiguity, 
             label='Ambiguity', color=AMBIGUITY_COLOR, linestyle=':', linewidth=1.2)
-        ax2.plot(
+        salience_plot = ax2.plot(
             x_range, 
             summed_salience, 
             label='Salience', color=SALIENCE_COLOR, linestyle=':', linewidth=1.2)
-        ax2.plot(
+        pragmatic_value_plot = ax2.plot(
             x_range, 
             summed_pragmatic_value, 
             label='Pragmatic Value', color=PRAGMATIC_COLOR, linestyle=':', linewidth=1.2)
-        
-        # Plot Novelty if provided
-        if summed_novelty is not None:
-            ax2.plot(
-                x_range, 
-                summed_novelty, 
-                label='Novelty', color=NOVELTY_COLOR, linestyle=':', linewidth=1.2)
+        novelty_plot = ax2.plot(
+            x_range, 
+            summed_novelty, 
+            label='Novelty', color=NOVELTY_COLOR, linestyle=':', linewidth=1.2)
     
     # Set labels and title
     ax.set_title(f'Expected EFE Agent {chr(105+i)}', fontsize=label_font_size)
@@ -458,10 +502,14 @@ def plot_expected_efe(
         if plot_EFE_terms:
             ax2.set_ylabel('Nats', fontsize=label_font_size)
     if SHOW_LEGEND:
-        ax.legend(loc='upper left')
         if plot_EFE_terms:
-            ax2.legend(loc='upper right')
+            lines = [efe_plot[0], risk_plot[0], ambiguity_plot[0], salience_plot[0], pragmatic_value_plot[0], novelty_plot[0]]
+            labels = [line.get_label() for line in lines]
+            ax2.legend(lines, labels)
+            # ax2.legend(loc='upper right')
             # ax2.legend(loc='upper center', bbox_to_anchor=(0.5, -0.15), ncol=3)
+        else:
+            ax.legend(loc='upper left')
 
 
 def plot_efe_risk_ambiguity(expected_efe, weighted_risk, weighted_ambiguity, ax, i):
