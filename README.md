@@ -18,15 +18,27 @@ Factorised Active Inference Agents for Multi-Agent Interactions
 
 - [`agent.py`](./agent.py): Factorised active inference agent
 - [`games.py`](./games.py): Normal-form game payoff matrices
-- [`notebooks/`](./notebooks/): Jupyter notebooks and supporting code
+- [`utils/`](./utils/): Utility modules
     - `simulation.py`: Simulation functions, to run experiments using the agents and games
+    - `database.py`: Database utilities, to store and retrieve simulation results
+    - `timeseries.py`: Time series utilities, to get metrics and apply transforms to time series data
     - `plotting.py`: Plotting functions, to plot the results of the simulations
-    - `database_utils.py`: Database utilities, to store and retrieve simulation results
-    - `timeseries_utils.py`: Time series utilities, to get metrics and apply transforms to time series data
     - `analysis.py`: Functions for information-theoretic analysis
+- [`scripts/`](./scripts/): Command-line scripts to run simulations and plot results
+    - `INFG-simulate.py`: Run multiple simulations and store the results in a database
+    - `INFG-plot.py`: Plot the results of multiple simulations
+- [`notebooks/`](./notebooks/): Jupyter notebooks and supporting code
 - [`docs/`](./docs/): Documentation and figures
 
-## Multiple runs of experiments
+## Scripts
 
-The scripts `notebooks/INFG-generate-data.py` and `notebooks/INFG-plot-data.py` can be used to run multiple experiments and plot the results. 
-The scripts are designed to be run from the command line.
+```bash
+# 1. Set simulation (expriment) configuration
+# [for now, we edit `scripts/INFG-simulate.py` to change the simulation parameters]
+
+# 2. Run simulations
+nohup python -OO INFG-simulate.py --num-repeats=20 --db-path=my-experiments.db &
+
+# 3. Plot all results
+python INFG-plot-batch.py --db-path=my-experiments.db --timestamp=20240928
+```
