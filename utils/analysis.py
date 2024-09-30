@@ -565,7 +565,7 @@ import warnings
 def plot_entropy_linegraphs_subplots(
     aggregated_df, 
     output_path=None, 
-    use_savgol=True,
+    use_savgol=False,
     savgol_window=21,
     savgol_polyorder=2
 ):
@@ -960,7 +960,7 @@ import warnings
 def plot_joint_entropy_linegraph(
     aggregated_df, 
     output_path=None, 
-    use_savgol=True,
+    use_savgol=False,
     savgol_window=21,
     savgol_polyorder=3
 ):
@@ -1272,7 +1272,7 @@ import warnings
 def plot_cmi_linegraphs(
     aggregated_df, 
     output_path=None, 
-    use_savgol=True,
+    use_savgol=False,
     savgol_window=21,
     savgol_polyorder=3
 ):
@@ -1606,7 +1606,7 @@ import warnings
 def plot_cte_linegraphs(
     aggregated_df, 
     output_path=None, 
-    use_savgol=True,
+    use_savgol=False,
     savgol_window=21,
     savgol_polyorder=3
 ):
@@ -1945,7 +1945,7 @@ import warnings
 def plot_pi_linegraphs(
     aggregated_df, 
     output_path=None, 
-    use_savgol=True,
+    use_savgol=False,
     savgol_window=21,
     savgol_polyorder=3
 ):
@@ -2326,7 +2326,7 @@ def plot_entropy_heatmap_single(entropy_measures_df):
 
 def plot_entropy_linegraphs_subplots(
     aggregated_df, 
-    use_savgol=True,
+    use_savgol=False,
     savgol_window=21,
     savgol_polyorder=2
 ):
@@ -2686,7 +2686,7 @@ def plot_joint_entropy_heatmap_single(joint_entropy_df, output_path=None):
 def plot_joint_entropy_linegraph(
     aggregated_df, 
     output_path=None, 
-    use_savgol=True,
+    use_savgol=False,
     savgol_window=21,
     savgol_polyorder=3
 ):
@@ -3003,7 +3003,7 @@ import warnings
 def plot_cmi_linegraphs_cont(
     aggregated_df, 
     output_path=None, 
-    use_savgol=True,
+    use_savgol=False,
     savgol_window=21,
     savgol_polyorder=3
 ):
@@ -3167,7 +3167,7 @@ def conditional_mutual_information_cont(data, action_suffix='_action'):
     # Check if mean and sem_cmi exist for plotting
     if 'mean_cmi' in aggregated_df.columns:
         # If repeats are present, plot line graphs with standard error shading
-        plot_cmi_linegraphs_cont(aggregated_df, use_savgol=True)
+        plot_cmi_linegraphs_cont(aggregated_df, use_savgol=False)
     else:
         # Otherwise, use the original heatmap plot
         plot_local_conditional_mutual_information_heatmap_cont(aggregated_df)
@@ -3229,14 +3229,10 @@ def calculate_local_conditional_transfer_entropy_cont(data, action_suffix):
     # Initialize the JIDT CTE calculator
     calc = initialize_cte_calculator_cont()
 
-    # calc.setProperty("k_HISTORY", "10")
-    # calc.setProperty("k_TAU", "10")
-    # calc.setProperty("l_HISTORY", "10")
-    # calc.setProperty("l_TAU", "10")
-    # calc.setProperty("DELAY", "10")
-    # calc.setProperty("COND_EMBED_LENGTHS", "10")
-    # calc.setProperty("COND_TAUS", "10")
-    # calc.setProperty("COND_DELAYS", "10")
+    calc.setProperty("k_HISTORY", "5")
+    calc.setProperty("AUTO_EMBED_METHOD", "MAX_CORR_AIS")
+    calc.setProperty("AUTO_EMBED_K_SEARCH_MAX", "10")
+    calc.setProperty("AUTO_EMBED_TAU_SEARCH_MAX", "10")
 
     # Prepare result storage for local CTE
     local_cte_dict = {}
@@ -3362,7 +3358,7 @@ import warnings
 def plot_cte_linegraphs(
     aggregated_df, 
     output_path=None, 
-    use_savgol=True,
+    use_savgol=False,
     savgol_window=21,
     savgol_polyorder=3
 ):
@@ -3559,6 +3555,11 @@ def calculate_local_pi_for_agent_cont(data, agent_col, calc):
     """
     # Convert the agent's data into a native Python list (1D array)
     actions = data[agent_col].values.astype(float).tolist()
+
+    # calc.setProperty("k_HISTORY", "5")
+    # calc.setProperty("AUTO_EMBED_METHOD", "MAX_CORR_AIS")
+    # calc.setProperty("AUTO_EMBED_K_SEARCH_MAX", "10")
+    # calc.setProperty("AUTO_EMBED_TAU_SEARCH_MAX", "10")
     
     # Start adding observations
     calc.startAddObservations()
@@ -3698,7 +3699,7 @@ import warnings
 def plot_pi_linegraphs(
     aggregated_df, 
     output_path=None, 
-    use_savgol=True,
+    use_savgol=False,
     savgol_window=21,
     savgol_polyorder=3
 ):
@@ -4112,7 +4113,7 @@ def plot_total_correlation_heatmap(total_corr_df):
     plt.show()
 
 
-def plot_total_correlation_linegraph(aggregated_df, use_savgol=True, savgol_window=21, savgol_polyorder=3):
+def plot_total_correlation_linegraph(aggregated_df, use_savgol=False, savgol_window=21, savgol_polyorder=3):
     """
     Plots a line graph of average total correlation with standard error shading,
     with optional Savitzky-Golay smoothing for smoother lines.
@@ -4237,3 +4238,670 @@ def total_correlation_cont(data, action_suffix='_action'):
 
     # Plot heatmap or line graph based on data structure
     plot_total_correlation(total_corr_df)
+
+
+
+# ======================================================================================================================================================
+# DUAL TOTAL CORRELATION CALCULATION: KSG
+# ======================================================================================================================================================
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from matplotlib import gridspec
+from matplotlib.ticker import MaxNLocator
+from jpype import JPackage, startJVM, isJVMStarted, getDefaultJVMPath
+import warnings
+from scipy.signal import savgol_filter
+
+def dual_total_correlation_continuous_multivariate(data, action_columns):
+    import jpype
+    import jpype.imports
+    from jpype.types import JArray, JDouble
+    import numpy as np
+
+    """
+    Calculate dual total correlation using the Kraskov estimator for continuous variables.
+    This version uses JPype to call the Java class.
+
+    Parameters:
+    - data: pandas DataFrame containing the data.
+    - action_columns: List of column names representing the continuous variables for dual total correlation calculation.
+
+    Returns:
+    - NumPy array with Dual Total Correlation (Bits) per observation.
+    """
+    # Clean the data by removing infinities and NaNs
+    data_clean = data.replace([np.inf, -np.inf], np.nan).dropna(subset=action_columns)
+
+    # Ensure combined_actions is a 2D array (n_observations x n_variables)
+    combined_actions = data_clean[action_columns].values.astype(float)
+
+    # Import the required Java class
+    from infodynamics.measures.continuous.kraskov import DualTotalCorrelationCalculatorKraskov
+
+    # Initialize the calculator
+    calc = DualTotalCorrelationCalculatorKraskov()
+    num_dimensions = combined_actions.shape[1]
+    calc.initialise(num_dimensions)
+
+    # Convert combined_actions to a JArray of JDouble (2D array)
+    combined_actions_jarray = JArray(JArray(JDouble))(len(combined_actions))
+    for i, row in enumerate(combined_actions):
+        combined_actions_jarray[i] = JArray(JDouble)(row)
+
+    # Supply the observations
+    calc.setObservations(combined_actions_jarray)
+
+    # Compute local dual total correlation in nats
+    local_result_nats = calc.computeLocalOfPreviousObservations()
+
+    # Convert nats to bits
+    local_result_bits = np.array(local_result_nats) / np.log(2)
+
+    return local_result_bits
+
+
+def calculate_dual_total_correlation_continuous(data, action_suffix='_action'):
+    """
+    Calculates dual total correlation over all agents' actions or variables.
+    Handles both single runs and multiple repeats.
+
+    Parameters:
+    - data: pandas DataFrame containing the data.
+    - action_suffix: Suffix used to identify action columns.
+
+    Returns:
+    - If 'Repeat' is not in data:
+        - DataFrame with columns ['Dual_Total_Correlation_Bits', 'Timestep']
+      If 'Repeat' is in data:
+        - DataFrame with columns ['Timestep', 'Mean_Dual_Total_Correlation', 'Std_Error']
+    """
+    # Find all agent action columns
+    action_columns = [col for col in data.columns if col.endswith(action_suffix)]
+    result_df_list = []
+
+    if 'Repeat' in data.columns:
+        # Multiple runs: Calculate dual total correlation for each repeat
+        grouped = data.groupby('Repeat')
+        for repeat, group in grouped:
+            # Ensure the group is sorted by Timestep
+            group_sorted = group.sort_values('Timestep')
+
+            # Calculate dual total correlation for the continuous variables
+            dual_total_correlation_bits = dual_total_correlation_continuous_multivariate(group_sorted, action_columns)
+
+            # Create a DataFrame for the dual total correlation values
+            dual_total_correlation_df = pd.DataFrame({
+                'Dual_Total_Correlation_Bits': dual_total_correlation_bits,
+                'Timestep': group_sorted['Timestep'].values[:len(dual_total_correlation_bits)],
+                'Repeat': repeat
+            })
+            result_df_list.append(dual_total_correlation_df)
+
+        # Combine all results into a single DataFrame
+        combined_df = pd.concat(result_df_list, ignore_index=True)
+
+        # Calculate mean and standard error across repeats for each timestep
+        aggregated_df = combined_df.groupby('Timestep').agg(
+            Mean_Dual_Total_Correlation=('Dual_Total_Correlation_Bits', 'mean'),
+            Std_Error=('Dual_Total_Correlation_Bits', 'sem')
+        ).reset_index()
+
+        return aggregated_df
+    else:
+        # Single run: Calculate dual total correlation normally
+        # Ensure the data is sorted by Timestep
+        data_sorted = data.sort_values('Timestep')
+
+        # Calculate dual total correlation for the continuous variables
+        dual_total_correlation_bits = dual_total_correlation_continuous_multivariate(data_sorted, action_columns)
+
+        # Create a DataFrame for the dual total correlation values
+        dual_total_correlation_df = pd.DataFrame({
+            'Dual_Total_Correlation_Bits': dual_total_correlation_bits,
+            'Timestep': data_sorted['Timestep'].values[:len(dual_total_correlation_bits)]
+        })
+
+        return dual_total_correlation_df
+
+def plot_dual_total_correlation(dual_total_correlation_df, output_path=None):
+    """
+    Plots a heatmap or line graph for the dual total correlation values based on the DataFrame structure.
+
+    Parameters:
+    - dual_total_correlation_df: pandas DataFrame containing dual total correlation measures.
+    - output_path: Optional; path to save the plot (without extension).
+    """
+    if {'Mean_Dual_Total_Correlation', 'Std_Error'}.issubset(dual_total_correlation_df.columns):
+        # Data has multiple repeats: Plot average dual total correlation with standard error as a line graph
+        plot_dual_total_correlation_linegraph(dual_total_correlation_df, output_path)
+    else:
+        # Single run: Plot heatmap
+        plot_dual_total_correlation_heatmap_single(dual_total_correlation_df, output_path)
+
+def plot_dual_total_correlation_heatmap_single(dual_total_correlation_df, output_path=None):
+    """
+    Plots a heatmap of dual total correlation values over timesteps (single run).
+
+    Parameters:
+    - dual_total_correlation_df: pandas DataFrame containing dual total correlation measures.
+    - output_path: Optional; path to save the plot (without extension).
+    """
+    # Create a pivot table for heatmap plotting
+    pivot_table = dual_total_correlation_df.pivot_table(
+        index='Timestep',
+        values='Dual_Total_Correlation_Bits',
+        aggfunc='mean'
+    ).T  # Transpose to have Timesteps on x-axis
+
+    # Define a custom colormap
+    cmap = sns.color_palette("viridis", as_cmap=True)
+
+    # Create a gridspec layout to control the colorbar and heatmap separately
+    fig = plt.figure(figsize=(10, 2), dpi=300)  # Wide and not very tall
+    gs = gridspec.GridSpec(1, 2, width_ratios=[20, 1])  # 20:1 ratio between heatmap and colorbar
+
+    # Create the heatmap in the first grid cell
+    ax = plt.subplot(gs[0])
+    sns.heatmap(pivot_table, cmap=cmap, cbar=False, ax=ax, linewidths=0, cbar_kws={"shrink": 0.5})
+
+    # Set axis labels and title with the appropriate sizes
+    ax.set_xlabel('Time', fontsize=12, labelpad=5)
+    ax.set_ylabel('Dual Total Correlation', fontsize=12, labelpad=5)  # Keep axis label as 'Dual Total Correlation'
+    ax.set_title('Dual Total Correlation Over Time', fontsize=14, pad=10)
+
+    # Set the y-tick label to 'Dual Total Correlation' without changing the axis label
+    ax.set_yticks([0.5])  # Only one y-tick for "Dual Total Correlation"
+    ax.set_yticklabels(['Dual Total Correlation'], fontsize=10)
+
+    # Ensure that all labels are shown on x-axis, and ticks are centered in the middle of each cell
+    ax.xaxis.set_major_locator(MaxNLocator(integer=True, prune='both', nbins=6))
+    ax.set_xticklabels([int(tick) for tick in ax.get_xticks()], fontsize=10)
+
+    # Create the colorbar in the second grid cell
+    cbar_ax = plt.subplot(gs[1])
+    norm = plt.Normalize(vmin=pivot_table.values.min(), vmax=pivot_table.values.max())
+    sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+    sm.set_array([])
+    cbar = plt.colorbar(sm, cax=cbar_ax, orientation='vertical')
+    cbar.ax.tick_params(labelsize=10)
+    cbar.set_label('Dual Total Correlation (Bits)', size=12)
+
+    # Adjust layout for a clean look
+    plt.tight_layout(rect=[0, 0, 1, 0.95])
+
+    # Save the figure in high-resolution formats (PDF and PNG)
+    if output_path is not None:
+        plt.savefig(f'{output_path}.pdf', format='pdf', bbox_inches='tight')
+        plt.savefig(f'{output_path}.png', format='png', dpi=300, bbox_inches='tight')
+
+    plt.show()
+
+def plot_dual_total_correlation_linegraph(
+    aggregated_df, 
+    output_path=None, 
+    use_savgol=False,
+    savgol_window=21,
+    savgol_polyorder=3
+):
+    """
+    Plots a line graph of average dual total correlation with standard error shading, 
+    with optional Savitzky-Golay smoothing.
+
+    Parameters:
+    - aggregated_df: pandas DataFrame containing ['Timestep', 'Mean_Dual_Total_Correlation', 'Std_Error']
+    - output_path: Optional; path to save the plot (without extension).
+    - use_savgol: Boolean; if True, apply Savitzky-Golay filter to smooth the data.
+    - savgol_window: Window length for Savitzky-Golay filter (must be a positive odd integer and <= number of data points).
+    - savgol_polyorder: Polynomial order for Savitzky-Golay filter (must be less than savgol_window).
+    """
+    # Validate input DataFrame
+    required_columns = {'Timestep', 'Mean_Dual_Total_Correlation', 'Std_Error'}
+    if not required_columns.issubset(aggregated_df.columns):
+        raise ValueError(f"Input DataFrame must contain columns: {required_columns}")
+
+    # Sort DataFrame by 'Timestep'
+    aggregated_df = aggregated_df.sort_values('Timestep')
+
+    # Extract data
+    x = aggregated_df['Timestep'].values
+    y = aggregated_df['Mean_Dual_Total_Correlation'].values
+    y_err = aggregated_df['Std_Error'].values
+
+    # Apply Savitzky-Golay filter if enabled
+    if use_savgol:
+        # Validate Savitzky-Golay parameters
+        if not isinstance(savgol_window, int) or savgol_window <= 0 or savgol_window % 2 == 0:
+            warnings.warn(
+                f"Savitzky-Golay window size must be a positive odd integer. "
+                f"Received window={savgol_window}. Skipping Savitzky-Golay filtering."
+            )
+            y_smooth = y
+            y_err_smooth = y_err
+        elif savgol_window > len(x):
+            warnings.warn(
+                f"Savitzky-Golay window size ({savgol_window}) is larger than the number of data points ({len(x)}). "
+                f"Skipping Savitzky-Golay filtering."
+            )
+            y_smooth = y
+            y_err_smooth = y_err
+        elif savgol_polyorder >= savgol_window:
+            warnings.warn(
+                f"Savitzky-Golay polyorder ({savgol_polyorder}) must be less than window size ({savgol_window}). "
+                f"Skipping Savitzky-Golay filtering."
+            )
+            y_smooth = y
+            y_err_smooth = y_err
+        else:
+            try:
+                # Apply Savitzky-Golay filter
+                y_smooth = savgol_filter(y, window_length=savgol_window, polyorder=savgol_polyorder)
+                y_err_smooth = savgol_filter(y_err, window_length=savgol_window, polyorder=savgol_polyorder)
+            except Exception as e:
+                warnings.warn(
+                    f"Savitzky-Golay filtering failed with error: {e}. Skipping Savitzky-Golay filtering."
+                )
+                y_smooth = y
+                y_err_smooth = y_err
+    else:
+        # No smoothing; use original data
+        y_smooth = y
+        y_err_smooth = y_err
+
+    # Initialize the plot
+    plt.figure(figsize=(5, 3), dpi=300)
+    sns.set(style="whitegrid")
+
+    # Define color palette
+    color = sns.color_palette("viridis", 1)[0]
+
+    # Plot mean dual total correlation line
+    plt.plot(
+        x,
+        y_smooth,
+        label='Mean Dual Total Correlation',
+        color=color,
+        linewidth=1  # Thinner line
+    )
+
+    # Plot standard error shading
+    plt.fill_between(
+        x,
+        y_smooth - y_err_smooth,
+        y_smooth + y_err_smooth,
+        color=color,
+        alpha=0.2,  # Increased alpha for better visibility
+        label='Standard Error'
+    )
+
+    # Set labels and title
+    plt.xlabel('Time', fontsize=7)
+    plt.ylabel('Dual Total Correlation (Bits)', fontsize=7)
+    plt.title('Average Dual Total Correlation Over Time with Standard Error', fontsize=8)
+
+    # Customize ticks
+    plt.xticks(fontsize=6)
+    plt.yticks(fontsize=6)
+
+    # Add legend
+    plt.legend(fontsize=6)
+
+    # Adjust layout for a clean look
+    plt.tight_layout()
+
+    # Save the figure
+    if output_path is not None:
+        plt.savefig(f'{output_path}.pdf', format='pdf', bbox_inches='tight')
+        plt.savefig(f'{output_path}.png', format='png', dpi=300, bbox_inches='tight')
+
+    # Show plot
+    plt.show()
+
+def dual_total_correlation_cont(data, action_suffix='_action'):
+    """
+    Main function to calculate and plot dual total correlation heatmap or line graph based on the presence of 'Repeat' column.
+
+    Parameters:
+    - data: pandas DataFrame containing the data.
+    - action_suffix: Suffix used to identify action columns.
+    """
+    # Calculate dual total correlation
+    dual_total_correlation_df = calculate_dual_total_correlation_continuous(data, action_suffix)
+
+    # Plot heatmap or line graph based on data structure
+    plot_dual_total_correlation(dual_total_correlation_df)
+
+
+# ======================================================================================================================================================
+# MULTI-INFORMATION: KSG
+# ======================================================================================================================================================
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from matplotlib import gridspec
+from matplotlib.ticker import MaxNLocator
+from jpype import JPackage, startJVM, isJVMStarted, getDefaultJVMPath
+import warnings
+from scipy.signal import savgol_filter
+
+def multi_information_continuous_multivariate(data, action_columns):
+    import jpype
+    import jpype.imports
+    from jpype.types import JArray, JDouble
+    import numpy as np
+
+    """
+    Calculate multi-information using the Kraskov estimator for continuous variables.
+    This version uses JPype to call the Java class.
+
+    Parameters:
+    - data: pandas DataFrame containing the data.
+    - action_columns: List of column names representing the continuous variables for multi-information calculation.
+
+    Returns:
+    - NumPy array with Multi-Information (Bits) per observation.
+    """
+    # Clean the data by removing infinities and NaNs
+    data_clean = data.replace([np.inf, -np.inf], np.nan).dropna(subset=action_columns)
+
+    # Ensure combined_actions is a 2D array (n_observations x n_variables)
+    combined_actions = data_clean[action_columns].values.astype(float)
+
+    # Import the required Java class
+    from infodynamics.measures.continuous.kraskov import MultiInfoCalculatorKraskov2
+
+    # Initialize the calculator
+    calc = MultiInfoCalculatorKraskov2()
+    num_dimensions = combined_actions.shape[1]
+    calc.initialise(num_dimensions)
+
+    # Convert combined_actions to a JArray of JDouble (2D array)
+    combined_actions_jarray = JArray(JArray(JDouble))(len(combined_actions))
+    for i, row in enumerate(combined_actions):
+        combined_actions_jarray[i] = JArray(JDouble)(row)
+
+    # Supply the observations
+    calc.setObservations(combined_actions_jarray)
+
+    # Compute local multi-information in nats
+    local_result_nats = calc.computeLocalOfPreviousObservations()
+
+    # Convert nats to bits
+    local_result_bits = np.array(local_result_nats) / np.log(2)
+
+    return local_result_bits
+
+
+def calculate_multi_information_continuous(data, action_suffix='_action'):
+    """
+    Calculates multi-information over all agents' actions or variables.
+    Handles both single runs and multiple repeats.
+
+    Parameters:
+    - data: pandas DataFrame containing the data.
+    - action_suffix: Suffix used to identify action columns.
+
+    Returns:
+    - If 'Repeat' is not in data:
+        - DataFrame with columns ['Multi_Information_Bits', 'Timestep']
+      If 'Repeat' is in data:
+        - DataFrame with columns ['Timestep', 'Mean_Multi_Information', 'Std_Error']
+    """
+    # Find all agent action columns
+    action_columns = [col for col in data.columns if col.endswith(action_suffix)]
+    result_df_list = []
+
+    if 'Repeat' in data.columns:
+        # Multiple runs: Calculate multi-information for each repeat
+        grouped = data.groupby('Repeat')
+        for repeat, group in grouped:
+            # Ensure the group is sorted by Timestep
+            group_sorted = group.sort_values('Timestep')
+
+            # Calculate multi-information for the continuous variables
+            multi_information_bits = multi_information_continuous_multivariate(group_sorted, action_columns)
+
+            # Create a DataFrame for the multi-information values
+            multi_information_df = pd.DataFrame({
+                'Multi_Information_Bits': multi_information_bits,
+                'Timestep': group_sorted['Timestep'].values[:len(multi_information_bits)],
+                'Repeat': repeat
+            })
+            result_df_list.append(multi_information_df)
+
+        # Combine all results into a single DataFrame
+        combined_df = pd.concat(result_df_list, ignore_index=True)
+
+        # Calculate mean and standard error across repeats for each timestep
+        aggregated_df = combined_df.groupby('Timestep').agg(
+            Mean_Multi_Information=('Multi_Information_Bits', 'mean'),
+            Std_Error=('Multi_Information_Bits', 'sem')
+        ).reset_index()
+
+        return aggregated_df
+    else:
+        # Single run: Calculate multi-information normally
+        # Ensure the data is sorted by Timestep
+        data_sorted = data.sort_values('Timestep')
+
+        # Calculate multi-information for the continuous variables
+        multi_information_bits = multi_information_continuous_multivariate(data_sorted, action_columns)
+
+        # Create a DataFrame for the multi-information values
+        multi_information_df = pd.DataFrame({
+            'Multi_Information_Bits': multi_information_bits,
+            'Timestep': data_sorted['Timestep'].values[:len(multi_information_bits)]
+        })
+
+        return multi_information_df
+
+def plot_multi_information(multi_information_df, output_path=None):
+    """
+    Plots a heatmap or line graph for the multi-information values based on the DataFrame structure.
+
+    Parameters:
+    - multi_information_df: pandas DataFrame containing multi-information measures.
+    - output_path: Optional; path to save the plot (without extension).
+    """
+    if {'Mean_Multi_Information', 'Std_Error'}.issubset(multi_information_df.columns):
+        # Data has multiple repeats: Plot average multi-information with standard error as a line graph
+        plot_multi_information_linegraph(multi_information_df, output_path)
+    else:
+        # Single run: Plot heatmap
+        plot_multi_information_heatmap_single(multi_information_df, output_path)
+
+def plot_multi_information_heatmap_single(multi_information_df, output_path=None):
+    """
+    Plots a heatmap of multi-information values over timesteps (single run).
+
+    Parameters:
+    - multi_information_df: pandas DataFrame containing multi-information measures.
+    - output_path: Optional; path to save the plot (without extension).
+    """
+    # Create a pivot table for heatmap plotting
+    pivot_table = multi_information_df.pivot_table(
+        index='Timestep',
+        values='Multi_Information_Bits',
+        aggfunc='mean'
+    ).T  # Transpose to have Timesteps on x-axis
+
+    # Define a custom colormap
+    cmap = sns.color_palette("viridis", as_cmap=True)
+
+    # Create a gridspec layout to control the colorbar and heatmap separately
+    fig = plt.figure(figsize=(10, 2), dpi=300)  # Wide and not very tall
+    gs = gridspec.GridSpec(1, 2, width_ratios=[20, 1])  # 20:1 ratio between heatmap and colorbar
+
+    # Create the heatmap in the first grid cell
+    ax = plt.subplot(gs[0])
+    sns.heatmap(pivot_table, cmap=cmap, cbar=False, ax=ax, linewidths=0, cbar_kws={"shrink": 0.5})
+
+    # Set axis labels and title with the appropriate sizes
+    ax.set_xlabel('Time', fontsize=12, labelpad=5)
+    ax.set_ylabel('Multi-Information', fontsize=12, labelpad=5)  # Keep axis label as 'Multi-Information'
+    ax.set_title('Multi-Information Over Time', fontsize=14, pad=10)
+
+    # Set the y-tick label to 'Multi-Information' without changing the axis label
+    ax.set_yticks([0.5])  # Only one y-tick for "Multi-Information"
+    ax.set_yticklabels(['Multi-Information'], fontsize=10)
+
+    # Ensure that all labels are shown on x-axis, and ticks are centered in the middle of each cell
+    ax.xaxis.set_major_locator(MaxNLocator(integer=True, prune='both', nbins=6))
+    ax.set_xticklabels([int(tick) for tick in ax.get_xticks()], fontsize=10)
+
+    # Create the colorbar in the second grid cell
+    cbar_ax = plt.subplot(gs[1])
+    norm = plt.Normalize(vmin=pivot_table.values.min(), vmax=pivot_table.values.max())
+    sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+    sm.set_array([])
+    cbar = plt.colorbar(sm, cax=cbar_ax, orientation='vertical')
+    cbar.ax.tick_params(labelsize=10)
+    cbar.set_label('Multi-Information (Bits)', size=12)
+
+    # Adjust layout for a clean look
+    plt.tight_layout(rect=[0, 0, 1, 0.95])
+
+    # Save the figure in high-resolution formats (PDF and PNG)
+    if output_path is not None:
+        plt.savefig(f'{output_path}.pdf', format='pdf', bbox_inches='tight')
+        plt.savefig(f'{output_path}.png', format='png', dpi=300, bbox_inches='tight')
+
+    plt.show()
+
+def plot_multi_information_linegraph(
+    aggregated_df, 
+    output_path=None, 
+    use_savgol=False,
+    savgol_window=21,
+    savgol_polyorder=3
+):
+    """
+    Plots a line graph of average multi-information with standard error shading, 
+    with optional Savitzky-Golay smoothing.
+
+    Parameters:
+    - aggregated_df: pandas DataFrame containing ['Timestep', 'Mean_Multi_Information', 'Std_Error']
+    - output_path: Optional; path to save the plot (without extension).
+    - use_savgol: Boolean; if True, apply Savitzky-Golay filter to smooth the data.
+    - savgol_window: Window length for Savitzky-Golay filter (must be a positive odd integer and <= number of data points).
+    - savgol_polyorder: Polynomial order for Savitzky-Golay filter (must be less than savgol_window).
+    """
+    # Validate input DataFrame
+    required_columns = {'Timestep', 'Mean_Multi_Information', 'Std_Error'}
+    if not required_columns.issubset(aggregated_df.columns):
+        raise ValueError(f"Input DataFrame must contain columns: {required_columns}")
+
+    # Sort DataFrame by 'Timestep'
+    aggregated_df = aggregated_df.sort_values('Timestep')
+
+    # Extract data
+    x = aggregated_df['Timestep'].values
+    y = aggregated_df['Mean_Multi_Information'].values
+    y_err = aggregated_df['Std_Error'].values
+
+    # Apply Savitzky-Golay filter if enabled
+    if use_savgol:
+        # Validate Savitzky-Golay parameters
+        if not isinstance(savgol_window, int) or savgol_window <= 0 or savgol_window % 2 == 0:
+            warnings.warn(
+                f"Savitzky-Golay window size must be a positive odd integer. "
+                f"Received window={savgol_window}. Skipping Savitzky-Golay filtering."
+            )
+            y_smooth = y
+            y_err_smooth = y_err
+        elif savgol_window > len(x):
+            warnings.warn(
+                f"Savitzky-Golay window size ({savgol_window}) is larger than the number of data points ({len(x)}). "
+                f"Skipping Savitzky-Golay filtering."
+            )
+            y_smooth = y
+            y_err_smooth = y_err
+        elif savgol_polyorder >= savgol_window:
+            warnings.warn(
+                f"Savitzky-Golay polyorder ({savgol_polyorder}) must be less than window size ({savgol_window}). "
+                f"Skipping Savitzky-Golay filtering."
+            )
+            y_smooth = y
+            y_err_smooth = y_err
+        else:
+            try:
+                # Apply Savitzky-Golay filter
+                y_smooth = savgol_filter(y, window_length=savgol_window, polyorder=savgol_polyorder)
+                y_err_smooth = savgol_filter(y_err, window_length=savgol_window, polyorder=savgol_polyorder)
+            except Exception as e:
+                warnings.warn(
+                    f"Savitzky-Golay filtering failed with error: {e}. Skipping Savitzky-Golay filtering."
+                )
+                y_smooth = y
+                y_err_smooth = y_err
+    else:
+        # No smoothing; use original data
+        y_smooth = y
+        y_err_smooth = y_err
+
+    # Initialize the plot
+    plt.figure(figsize=(5, 3), dpi=300)
+    sns.set(style="whitegrid")
+
+    # Define color palette
+    color = sns.color_palette("viridis", 1)[0]
+
+    # Plot mean multi-information line
+    plt.plot(
+        x,
+        y_smooth,
+        label='Mean Multi-Information',
+        color=color,
+        linewidth=1  # Thinner line
+    )
+
+    # Plot standard error shading
+    plt.fill_between(
+        x,
+        y_smooth - y_err_smooth,
+        y_smooth + y_err_smooth,
+        color=color,
+        alpha=0.2,  # Increased alpha for better visibility
+        label='Standard Error'
+    )
+
+    # Set labels and title
+    plt.xlabel('Time', fontsize=7)
+    plt.ylabel('Multi-Information (Bits)', fontsize=7)
+    plt.title('Average Multi-Information Over Time with Standard Error', fontsize=8)
+
+    # Customize ticks
+    plt.xticks(fontsize=6)
+    plt.yticks(fontsize=6)
+
+    # Add legend
+    plt.legend(fontsize=6)
+
+    # Adjust layout for a clean look
+    plt.tight_layout()
+
+    # Save the figure
+    if output_path is not None:
+        plt.savefig(f'{output_path}.pdf', format='pdf', bbox_inches='tight')
+        plt.savefig(f'{output_path}.png', format='png', dpi=300, bbox_inches='tight')
+
+    # Show plot
+    plt.show()
+
+def multi_information_cont(data, action_suffix='_action'):
+    """
+    Main function to calculate and plot multi-information heatmap or line graph based on the presence of 'Repeat' column.
+
+    Parameters:
+    - data: pandas DataFrame containing the data.
+    - action_suffix: Suffix used to identify action columns.
+    """
+    # Calculate multi-information
+    multi_information_df = calculate_multi_information_continuous(data, action_suffix)
+
+    # Plot heatmap or line graph based on data structure
+    plot_multi_information(multi_information_df)
