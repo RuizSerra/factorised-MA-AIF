@@ -236,7 +236,7 @@ def main(args):
     agent_kwargs_same = reduce(
         lambda x, y: x == y and x,
         agent_kwargs
-    )
+    ) or (agent_kwargs == [{}] * num_players)
     logging.info((
         'Homogeneous agents: will permute space where applicable.' 
         if agent_kwargs_same else 
