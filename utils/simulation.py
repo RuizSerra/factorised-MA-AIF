@@ -121,7 +121,7 @@ def simulate_parallel(
                     results_db_path
                 )
 
-            logging.info(f'Stored results for {num_repeats} simulations in database: {results_db_path}')
+            logging.info(f'Stored results for {BATCH_SIZE} simulations in database: {results_db_path}')
             logging.info(f'Experiment ID: {commit_sha} {timestamp}')
     
     if num_batches > 1:
@@ -282,7 +282,7 @@ class IteratedGame:
         for t in range(T):
 
             # # Print summary for each agent -------------------------------------------
-            if t % 50 == 0:
+            if t % 200 == 0:
                 logging.info(f't={t}/{T}')
                 logging.debug('')
                 for agent in self.agents:
