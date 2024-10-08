@@ -645,8 +645,9 @@ class Agent:
 
         # Novelty ----------------------------------------------------------
         if self.compute_novelty:
-            raise NotImplementedError("Novelty computation implementation needs work!!")
-            novelty += self.compute_A_novelty(u)  # TODO: some sort of regularisation, novelty can be really large
+            # raise NotImplementedError("Novelty computation implementation needs work!!")
+            # novelty += self.compute_A_novelty(q_s_u, u)
+            novelty += self.compute_B_novelty(q_s_u, q_o_u, u) 
             # TODO: B novelty?
 
         # EFE of this action ---------------------------------------------------
@@ -654,7 +655,7 @@ class Agent:
         
         # Check other ways of computing EFE ------------------------------------
         salience = ppo_entropy - ambiguity
-        # assert salience >= -TOLERANCE, f"Salience term is not >= 0: {salience}, {ppo_entropy}, {ambiguity}"
+        # assert salience >= -TOLERANCE, f"Salience term is not >= 0: {salience}, {ambiguity}, {ppo_entropy}"
         # if not torch.all(salience >= -TOLERANCE):
         #     invalid_values = salience[salience < 0]
         #     raise AssertionError(f"Salience term is not >= 0. Invalid values: {invalid_values}")
@@ -672,19 +673,40 @@ class Agent:
 
         return EFE.unsqueeze(0), torch.tensor((ambiguity, risk, salience, pragmatic_value, novelty))
     
-    def compute_A_novelty(self, u_i):
+    def compute_A_novelty(self, q_s_u, u):
         '''
         Compute the novelty of the likelihood model A for action u_i
         '''
         novelty = 0
+        # Add a small constant to A_params to avoid W blowing up
+        A_params = self.A_params.clone().detach() + 0.5  # FIXME: softmax??
+        # A_params = self.A.clone().detach()
         # Da Costa et al. (2020; Eq. D.17)
-        W = 0.5 * (1/self.A_params - 1/self.A_params.sum(dim=1, keepdim=True))
+        W = 0.5 * (1/A_params - 1/A_params.sum(dim=1, keepdim=True))
         for factor_idx in range(self.num_agents):
-            s_pred = self.q_s_u[factor_idx, u_i]
+            s_pred = q_s_u[factor_idx]
             novelty += torch.dot(
                 self.A[factor_idx] @ s_pred, 
                 W[factor_idx] @ s_pred)
         return novelty
+    
+    def compute_B_novelty(self, q_s_u, q_o_u, u):
+
+        # q_os_u = torch.einsum(
+        #     'fos,fs->fos', 
+        #     self.A, 
+        #     q_s_u
+        # )
+
+        B_prime_params = self.B_params[:, u] + torch.einsum('fo,fs->fos', q_o_u, q_s_u)
+        B_prime = B_prime_params / B_prime_params.sum(dim=1, keepdim=True)
+
+        kl_div = B_prime * torch.log(B_prime / self.B[:, u] + EPSILON)
+
+        kl_div_per_f = kl_div.sum()  # sum over factors
+
+        return kl_div_per_f
+
     
     def collect_policies(
             self,
@@ -862,6 +884,8 @@ class Agent:
                 else:
                     # Full model is preferred -> update posterior
                     self.A_params[factor_idx] = A_posterior_params[factor_idx]
+
+                # print(delta_F, self.A_params[factor_idx].flatten(), A_posterior_params[factor_idx], A_reduced_params[factor_idx].flatten())
         else:
             self.A_params = A_posterior_params
         
