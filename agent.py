@@ -646,8 +646,10 @@ class Agent:
         # Novelty ----------------------------------------------------------
         if self.compute_novelty:
             # raise NotImplementedError("Novelty computation implementation needs work!!")
-            novelty += self.compute_A_novelty(q_s_u, q_o_u)
-            novelty += self.compute_B_novelty(self.q_s, q_s_u, u) 
+            if self.A_learning:
+                novelty += self.compute_A_novelty(q_s_u, q_o_u)
+            if self.B_learning:
+                novelty += self.compute_B_novelty(self.q_s, q_s_u, u) 
 
         # EFE of this action ---------------------------------------------------
         EFE = ambiguity + risk - novelty

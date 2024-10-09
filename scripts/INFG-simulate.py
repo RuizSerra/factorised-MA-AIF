@@ -8,6 +8,8 @@ Date:   2024-09-23
 import argparse
 import logging
 import numpy as np
+import torch.multiprocessing
+torch.multiprocessing.set_sharing_strategy('file_system')
 
 import sys
 sys.path.append('../')
@@ -165,9 +167,9 @@ if __name__ == '__main__':
         # [   
         #     ('Ch', chicken_2player, GAME_DURATION),
         # ],
-        # [   
-        #     ('SH', stag_hunt_2player, GAME_DURATION),
-        # ],
+        [   
+            ('SH', stag_hunt_2player, GAME_DURATION),
+        ],
         [   
             ('SH2', stag_hunt_3player_M2, GAME_DURATION),
         ],
@@ -191,10 +193,23 @@ if __name__ == '__main__':
         
         META_AGENT_KWARGS = [
             [
+                # dict(
+                #     A_prior_type='identity',
+                #     B_prior_type='uniform',
+                #     A_learning=False,
+                #     B_learning=True,
+                #     # beta_1=10,
+                #     # interoception=True,
+                #     # E_prior=torch.tensor([e, 1-e])
+                #     D_prior=[torch.tensor(p).float() for _ in range(num_players)],
+                # ),
                 dict(
-                    # beta_1=10,
-                    # interoception=True,
-                    # E_prior=torch.tensor([e, 1-e])
+                    beta_1=20,
+                    A_prior_type='identity',
+                    B_prior_type='uniform',
+                    A_learning=False,
+                    B_BMR='softmax',
+                    compute_novelty=True,
                     D_prior=[torch.tensor(p).float() for _ in range(num_players)],
                 ),
             ]
