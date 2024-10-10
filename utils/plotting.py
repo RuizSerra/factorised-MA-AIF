@@ -707,7 +707,8 @@ def plot_policy_heatmap(
         vmin=0, vmax=1,
         origin='upper', 
         aspect='auto', 
-        interpolation='nearest'
+        interpolation='nearest',
+        cmap='inferno',
     )
     
     ax.set_title(f'Policy Agent {chr(105+i)}', fontsize=label_font_size)
@@ -766,7 +767,8 @@ def plot_inferred_policy_heatmap(
         vmin=0, vmax=1,
         origin='upper', 
         aspect='auto', 
-        interpolation='nearest'
+        interpolation='nearest',
+        cmap='inferno',
     )
     
     ax.set_title(f'Agent {chr(105+i)}\'s inferred hidden state (each factor)', fontsize=label_font_size)
@@ -917,10 +919,11 @@ def plot_A(A_history, ax, i,
     num_actions = A_history.shape[-1]
     cax = ax.imshow(
         A_history[t_min:t_max, i].reshape(-1, num_players*num_actions*num_actions).T,
-        # vmin=0, vmax=1,
+        vmin=0, vmax=1,
         origin='upper', 
         aspect='auto', 
-        interpolation='nearest'
+        interpolation='nearest',
+        cmap='inferno',
     )
     labels = [f'[{chr(105+j)}, {o}, {s}]' 
               for j in range(num_players) 
@@ -956,14 +959,15 @@ def plot_B(B_history, i, t_min=0, t_max=None):
     ]
 
     for u_idx, data in enumerate(data_per_factor_and_action):
-        plt.figure(figsize=(8, 6))
+        plt.figure(figsize=(2, 1))
         ax = plt.gca()
         cax = ax.imshow(
             data,
-            # vmin=0, vmax=1,
+            vmin=0, vmax=1,
             origin='upper', 
             aspect='auto', 
-            interpolation='nearest'
+            interpolation='nearest',
+            cmap='inferno',
         )
 
         ax.set_title(r'$\boldsymbol{\mathsf{B}}_'+str(chr(105+i))+r'[u=\mathtt{'+str(chr(99+u_idx))+'}]$', fontsize=label_font_size)

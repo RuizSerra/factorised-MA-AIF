@@ -168,13 +168,21 @@ if __name__ == '__main__':
         #     ('Ch', chicken_2player, GAME_DURATION),
         # ],
         [   
+            ('Ch', chicken_2player, GAME_DURATION),
             ('SH', stag_hunt_2player, GAME_DURATION),
         ],
         [   
-            ('SH2', stag_hunt_3player_M2, GAME_DURATION),
+            ('Ch', chicken_3player, GAME_DURATION),
+            ('SH-g', stag_hunt_3player_M2, GAME_DURATION),
         ],
         [   
-            ('SH3', stag_hunt_3player_M3, GAME_DURATION),
+            ('Ch', chicken_3player, GAME_DURATION),
+            ('SH-r', stag_hunt_3player_M3, GAME_DURATION),
+        ],
+        [   
+            ('Ch', chicken_3player, GAME_DURATION),
+            ('SH-g', stag_hunt_3player_M2, GAME_DURATION//2),
+            ('SH-r', stag_hunt_3player_M3, GAME_DURATION//2),
         ],
     ]
 
@@ -204,18 +212,23 @@ if __name__ == '__main__':
                 #     D_prior=[torch.tensor(p).float() for _ in range(num_players)],
                 # ),
                 dict(
-                    beta_1=30,
-                    A_prior_type='identity',
+                    beta_1=100,
+                    # interoception=True,
+                    A_prior=99,
                     A_learning=False,
-                    B_prior_type='uniform',
+                    B_prior=0,
                     B_learning=True,
                     B_BMR='softmax',
+                    decay=0.8,
+                    B_learning_rate=1,
                     compute_novelty=True,
-                    D_prior=[torch.tensor(p).float() for _ in range(num_players)],
+                    # D_prior=[torch.tensor([0.001, 0.999]).float() for _ in range(num_players)]
                 ),
             ]
-            # for b1 in [1, 1e2, 1e4, 1e6, 1e8]
-            for p in priors
+            # for b1 in [10, 50, 100, 200, 500]
+            # for p in priors
+            # for d in np.arange(0, 2.1, 0.2)
+            # for b in [0.05, 0.1, 0.15, 0.2, 0.25, 0.5, 1]
         ]
         
         logging.info(f'Running simulation for game transitions: {game_transitions}')

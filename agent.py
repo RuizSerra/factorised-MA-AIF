@@ -47,12 +47,13 @@ class Agent:
             beta_0:float=10.,
             beta_1:float=10.,
             # Learning
-            A_prior_type:str='uniform',
-            B_prior_type:str='identity',
+            A_prior:Union[torch.Tensor, float]=99,  # identity
+            B_prior:Union[torch.Tensor, float]=0,   # uniform
             D_prior:Union[torch.Tensor, None]=None,
             E_prior:Union[torch.Tensor, None]=None,
             A_learning:bool=True,
             B_learning:bool=True,
+            B_learning_rate:Union[float, None]=0.05,
             learn_every_t_steps:int=24,
             learning_offset:int=6,
             decay:float=0.5,
@@ -74,10 +75,11 @@ class Agent:
             - beta_0 (float): The beta_0 hyperparameter
             - beta_1 (float): The beta_1 hyperparameter
             - decay (float): The decay rate
-            - A_prior_type (str): The type of prior for the observation model. One of ['identity', 'uniform']
-            - B_prior_type (str): The type of prior for the transition model. One of ['identity', 'uniform']
+            - A_prior (Union[torch.Tensor, float]): The prior for the observation model. If float, the strength of softmax (0 -> uniform, inf -> identity)
+            - B_prior (Union[torch.Tensor, float]): The prior for the transition model. If float, the strength of softmax (0 -> uniform, inf -> identity)
             - A_learning (bool): Whether the agent learns the observation model
             - B_learning (bool): Whether the agent learns the transition model
+            - B_learning_rate (Union[float, NoneType]): The learning rate for the transition model
             - learn_every_t_steps (int): The length of the interval for learning
             - A_BMR (Union[str, NoneType]): The Bayesian Model Reduction method for the observation model. One of ['identity', 'uniform', None]
             - B_BMR (Union[str, NoneType]): The Bayesian Model Reduction method for the transition model. One of ['identity', 'uniform', None]
@@ -93,22 +95,26 @@ class Agent:
         self.num_agents = num_agents = game_matrix.ndim  # Number of players (rank of game tensor)
 
         # Generative model parameters ------------------------------------------
-        if A_prior_type == 'identity':
-            self.A_params = torch.stack([torch.eye(num_actions) for _ in range(num_agents)]) + EPSILON  # Identity observation model prior
-        elif A_prior_type == 'uniform':
-            self.A_params = torch.ones((num_agents, num_actions, num_actions))  # Uniform observation model prior
+        if isinstance(A_prior, torch.Tensor):
+            self.A_params = A_prior
+        elif isinstance(A_prior, (int, float)):
+            self.A_params = torch.stack([
+                torch.softmax(A_prior * torch.eye(num_actions) + EPSILON, dim=-1)
+                for _ in range(num_agents)])  # Identity observation model prior
         else:
-            raise ValueError(f"Invalid A_prior_type: {A_prior_type}")
+            raise ValueError(f"Invalid A_prior: {A_prior}")
         self.A = self.A_params / self.A_params.sum(dim=1, keepdim=True)
 
-        if B_prior_type == 'identity':
+        if isinstance(B_prior, torch.Tensor):
+            self.B_params = B_prior
+        elif isinstance(B_prior, (int, float)):
             self.B_params = torch.stack([
-                torch.eye(num_actions) 
+                torch.softmax(B_prior * torch.eye(num_actions) + EPSILON, dim=-1)
                 for _ in range(num_actions) 
                 for _ in range(num_agents)
             ]).reshape(num_agents, num_actions, num_actions, num_actions)  # shape: (funk): factor, action (u), next state, kurrent state
-        elif B_prior_type == 'uniform':
-            self.B_params = torch.ones((num_agents, num_actions, num_actions, num_actions))
+        else:
+            raise ValueError(f"Invalid B_prior: {B_prior}")
         self.B = self.B_params / self.B_params.sum(dim=2, keepdim=True)
 
         self.set_log_C(game_matrix)  # Log preference over observations (payoffs)
@@ -137,6 +143,7 @@ class Agent:
         self.current_random_offset_learning = random.randint(-self.learning_offset, self.learning_offset)  # Random offset for learning
         self.A_learning = A_learning  # Learn the observation model
         self.B_learning = B_learning  # Learn the transition model
+        self.B_learning_rate = B_learning_rate
         self.A_BMR = A_BMR
         self.B_BMR = B_BMR
         self.decay = decay  # Forgetting rate for learning
@@ -714,7 +721,7 @@ class Agent:
             q_s_u,         # (f, n) 
             q_s            # (f, k)
         )
-        B_prime_params = self.B_params[:, u].squeeze() + outer_product
+        B_prime_params = self.B_params[:, u].squeeze() + self.B_learning_rate * outer_product
         B_prime = B_prime_params / B_prime_params.sum(dim=1, keepdim=True)
 
         # KL divergence D[ B'[u] || B[u] ] for each factor
@@ -950,11 +957,12 @@ class Agent:
 
         # Update parameters for every transition (s, u, s') in the history
         B_posterior_params = self.B_params.clone()
+        LEARNING_RATE = self.B_learning_rate if self.B_learning_rate is not None else 1/T
         for t in range(outer_products.shape[0]):
             # Likelihood parameters update
-            delta_params = outer_products[t] / T  # Shape: (n_agents, n_actions, n_actions)
+            delta_params = outer_products[t]  # Shape: (n_agents, n_actions, n_actions)
             u_it = self.u_history[t].item()   # Action u_i at time t
-            B_posterior_params[:, u_it] = self.B_params[:, u_it] + delta_params
+            B_posterior_params[:, u_it] = self.B_params[:, u_it] + LEARNING_RATE * delta_params
 
         # Bayesian Model Reduction ---------------------------------------------
         if self.B_BMR:
@@ -1013,7 +1021,7 @@ class Agent:
                     for action_idx in range(self.num_actions):
                         if evidence_differences[factor_idx, action_idx] > 0:
                             self.B_params[factor_idx, action_idx] = B_reduced[factor_idx, action_idx]
-                            print('Reduced', factor_idx, action_idx, B_reduced[factor_idx, action_idx])
+                            # print('Reduced', factor_idx, action_idx, B_reduced[factor_idx, action_idx])
                         else:
                             self.B_params[factor_idx, action_idx] = B_posterior_params[factor_idx, action_idx]
 
