@@ -188,7 +188,7 @@ if __name__ == '__main__':
         # Hardcoded for 2 actions
         start = np.array([0, 1])
         end = np.array([1, 0])
-        steps = 21
+        steps = 11
         priors = np.linspace(start, end, steps)
         
         META_AGENT_KWARGS = [
@@ -204,10 +204,11 @@ if __name__ == '__main__':
                 #     D_prior=[torch.tensor(p).float() for _ in range(num_players)],
                 # ),
                 dict(
-                    beta_1=20,
+                    beta_1=30,
                     A_prior_type='identity',
-                    B_prior_type='uniform',
                     A_learning=False,
+                    B_prior_type='uniform',
+                    B_learning=True,
                     B_BMR='softmax',
                     compute_novelty=True,
                     D_prior=[torch.tensor(p).float() for _ in range(num_players)],

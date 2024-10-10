@@ -106,7 +106,7 @@ class Agent:
                 torch.eye(num_actions) 
                 for _ in range(num_actions) 
                 for _ in range(num_agents)
-            ]).reshape(num_agents, num_actions, num_actions, num_actions)
+            ]).reshape(num_agents, num_actions, num_actions, num_actions)  # shape: (funk): factor, action (u), next state, kurrent state
         elif B_prior_type == 'uniform':
             self.B_params = torch.ones((num_agents, num_actions, num_actions, num_actions))
         self.B = self.B_params / self.B_params.sum(dim=2, keepdim=True)
@@ -645,23 +645,18 @@ class Agent:
 
         # Novelty ----------------------------------------------------------
         if self.compute_novelty:
-            # raise NotImplementedError("Novelty computation implementation needs work!!")
             if self.A_learning:
                 novelty += self.compute_A_novelty(q_s_u, q_o_u)
             if self.B_learning:
                 novelty += self.compute_B_novelty(self.q_s, q_s_u, u) 
-
-        # EFE of this action ---------------------------------------------------
-        EFE = ambiguity + risk - novelty
-        
-        # Check other ways of computing EFE ------------------------------------
+        # EFE value checks -----------------------------------------------------
         salience = ppo_entropy - ambiguity
         # assert salience >= -TOLERANCE, f"Salience term is not >= 0: {salience}, {ambiguity}, {ppo_entropy}"
         # if not torch.all(salience >= -TOLERANCE):
         #     invalid_values = salience[salience < 0]
         #     raise AssertionError(f"Salience term is not >= 0. Invalid values: {invalid_values}")
-        EFE1 = -salience - pragmatic_value
-        EFE2 = risk + ambiguity
+        EFE1 = - pragmatic_value - salience - novelty
+        EFE2 = risk + ambiguity - novelty
 
         # Assert that the two tensors are close, and print the average percentage difference if they aren't
         percentage_diff = (torch.abs(EFE1 - EFE2) / ((EFE1 + EFE2) / 2)) * 100  # Element-wise percentage difference calculation
@@ -671,6 +666,8 @@ class Agent:
             -Salience - Pragmatic Value = {EFE1}
             Risk + Ambiguity = {EFE2}
             Average percentage difference = {avg_percentage_diff:.1f}%"""
+
+        EFE = -pragmatic_value - (salience + novelty)
 
         return EFE.unsqueeze(0), torch.tensor((ambiguity, risk, salience, pragmatic_value, novelty))
     
@@ -693,12 +690,6 @@ class Agent:
     
     def compute_A_novelty(self, q_s_u, q_o_u):
 
-        # q_os_u = torch.einsum(
-        #     'fos,fs->fos', 
-        #     self.A, 
-        #     q_s_u
-        # )
-
         # A' = A + q_o_u x q_s_u
         A_prime_params = self.A_params + torch.einsum(
             'fs,fo->fos',  # (f, o, s): factor, observation, state
@@ -706,32 +697,32 @@ class Agent:
             q_o_u          # (f, o)
         )
         A_prime = A_prime_params / A_prime_params.sum(dim=1, keepdim=True)
+        # TODO: account for BMR?
 
-        # KL divergence D[ B'[u] || B[u] ] for each factor
-        kl_div = A_prime * torch.log(A_prime / self.A + EPSILON)
+        # KL divergence D[ A' || A ] for each factor
+        kl_div = (
+            A_prime * torch.log(A_prime / (self.A + EPSILON) + EPSILON)
+        ).sum(dim=(1, 2))
 
-        return kl_div.mean()  # average over factors
+        return kl_div.sum()  # over factors
     
     def compute_B_novelty(self, q_s, q_s_u, u):
 
-        # q_os_u = torch.einsum(
-        #     'fos,fs->fos', 
-        #     self.A, 
-        #     q_s_u
-        # )
-
         # B'[u] = B[u] + q_s_u x q_s
-        B_prime_params = self.B_params[:, u] + torch.einsum(
+        outer_product = torch.einsum(
             'fn,fk->fnk',  # (f, n, k): factor, next (state), kurrent (state)
             q_s_u,         # (f, n) 
             q_s            # (f, k)
         )
+        B_prime_params = self.B_params[:, u].squeeze() + outer_product
         B_prime = B_prime_params / B_prime_params.sum(dim=1, keepdim=True)
 
         # KL divergence D[ B'[u] || B[u] ] for each factor
-        kl_div = B_prime * torch.log(B_prime / self.B[:, u] + EPSILON)
+        kl_div = (
+            B_prime * torch.log(B_prime / (self.B[:, u].squeeze() + EPSILON) + EPSILON)
+        ).sum(dim=(1, 2))
 
-        return kl_div.mean()  # average over factors
+        return kl_div.sum()  # over factors
 
     
     def collect_policies(
@@ -880,63 +871,64 @@ class Agent:
                     torch.eye(self.num_actions)
                     for _ in range(self.A.shape[0])
                 ]).view(*self.A.shape)
-                raise NotImplementedError("Identity BMR for A disabled.")
-                mixture = self.decay
-                A_reduced_params = (
-                    mixture * self.A_params 
-                    + (1 - mixture) * A_reduced
+
+                MIXTURE = 0.7
+                A_reduced = (
+                    MIXTURE * self.A_params 
+                    + (1 - MIXTURE) * A_reduced
                 )
+                A_reduced = A_reduced / A_reduced.sum(dim=1, keepdim=True)
 
-                # Update model parameters if they reduce the free energy
-                self.delta_F = []
-                for factor_idx in range(len(self.q_s)):
-                    delta_F = delta_free_energy(
-                        A_posterior_params[factor_idx].flatten(), 
-                        self.A_params[factor_idx].flatten(), 
-                        A_reduced_params[factor_idx].flatten()
-                    )
-                    self.delta_F.append(delta_F)  # Data collection
-                    if delta_F < 0:
-                        # Reduced model is preferred -> replace full model with reduced model
-                        self.A_params[factor_idx] = A_reduced_params[factor_idx]
-                        # print(f"Factor {factor_idx}: Reduced model is preferred.")
-                        # print(f"Delta F: {delta_F}")
-                        # print(f"Reduced: {A_reduced_params[factor_idx]}")
-                        # print(f"Posterior: {A_posterior_params[factor_idx]}")
-                    else:
-                        # Full model is preferred -> update posterior
-                        self.A_params[factor_idx] = A_posterior_params[factor_idx]
-
+                # # Update model parameters if they reduce the free energy
+                # self.delta_F = []
+                # for factor_idx in range(len(self.q_s)):
+                #     delta_F = delta_free_energy(
+                #         A_posterior_params[factor_idx].flatten(), 
+                #         self.A_params[factor_idx].flatten(), 
+                #         A_reduced_params[factor_idx].flatten()
+                #     )
+                #     self.delta_F.append(delta_F)  # Data collection
+                #     if delta_F < 0:
+                #         # Reduced model is preferred -> replace full model with reduced model
+                #         self.A_params[factor_idx] = A_reduced_params[factor_idx]
+                #         # print(f"Factor {factor_idx}: Reduced model is preferred.")
+                #         # print(f"Delta F: {delta_F}")
+                #         # print(f"Reduced: {A_reduced_params[factor_idx]}")
+                #         # print(f"Posterior: {A_posterior_params[factor_idx]}")
+                #     else:
+                #         # Full model is preferred -> update posterior
+                #         self.A_params[factor_idx] = A_posterior_params[factor_idx]
                     # print(delta_F, self.A_params[factor_idx].flatten(), A_posterior_params[factor_idx], A_reduced_params[factor_idx].flatten())
             elif self.A_BMR == 'uniform':
                 A_reduced = torch.ones_like(self.A_params)
                 raise NotImplementedError("Uniform BMR for A disabled.")
             elif self.A_BMR == 'softmax':
-                STRENGTH = 0.5
+                STRENGTH = self.decay
                 A_reduced = F.softmax(
                     STRENGTH * self.A_params,
                     dim=-1
                 )
-                A_prior = self.A_params / self.A_params.sum(dim=1, keepdim=True)
-                A_posterior = A_posterior_params / A_posterior_params.sum(dim=1, keepdim=True)
-
-                # Da Costa et al. (2020; Eq. 26)
-                # log E_{q(A)}[ p_reduced(A) / p(A) ]
-                evidence_differences = torch.log(
-                    torch.einsum(
-                        'fos,fos->f',
-                        A_posterior,
-                        A_reduced / A_prior
-                    )
-                )
-
-                for factor_idx in range(self.num_agents):
-                    if evidence_differences[factor_idx] > 0:
-                        self.A_params[factor_idx] = A_reduced[factor_idx]
-                    else:
-                        self.A_params[factor_idx] = A_posterior_params[factor_idx]
             else:
                 raise ValueError(f"Invalid A_BMR: {self.A_BMR}")
+            
+            A_prior = self.A_params / self.A_params.sum(dim=1, keepdim=True)
+            A_posterior = A_posterior_params / A_posterior_params.sum(dim=1, keepdim=True)
+
+            # Da Costa et al. (2020; Eq. 26)
+            # log E_{q(A)}[ p_reduced(A) / p(A) ]
+            evidence_differences = torch.log(
+                torch.einsum(
+                    'fos,fos->f',
+                    A_posterior,
+                    A_reduced / A_prior
+                )
+            )
+
+            for factor_idx in range(self.num_agents):
+                if evidence_differences[factor_idx] > 0:
+                    self.A_params[factor_idx] = A_reduced[factor_idx]
+                else:
+                    self.A_params[factor_idx] = A_posterior_params[factor_idx]
 
         else:
             self.A_params = A_posterior_params
@@ -999,7 +991,7 @@ class Agent:
                 B_reduced = torch.ones_like(self.B_params)
                 raise NotImplementedError("Uniform BMR for B disabled.")
             elif self.B_BMR == 'softmax':
-                STRENGTH = 0.5
+                STRENGTH = self.decay
                 B_reduced = F.softmax(
                     STRENGTH * self.B_params.view(self.num_agents, self.num_actions, -1), 
                     dim=-1
@@ -1021,6 +1013,7 @@ class Agent:
                     for action_idx in range(self.num_actions):
                         if evidence_differences[factor_idx, action_idx] > 0:
                             self.B_params[factor_idx, action_idx] = B_reduced[factor_idx, action_idx]
+                            print('Reduced', factor_idx, action_idx, B_reduced[factor_idx, action_idx])
                         else:
                             self.B_params[factor_idx, action_idx] = B_posterior_params[factor_idx, action_idx]
 

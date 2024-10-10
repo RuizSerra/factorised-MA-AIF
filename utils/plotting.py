@@ -93,7 +93,7 @@ def highlight_transitions(game_transitions, ax, t_min=0, t_max=None):
         ax.text(
             sum(durations[:game_idx]) + (1/2)*durations[game_idx],  # x position
             y_mid,  # y position: halfway up the y-axis
-            label, 
+            r'$\texttt{'+label+'}$', 
             color='gray', 
             alpha=0.4,
             ha='center')
