@@ -234,17 +234,25 @@ harmony_3player = torch.tensor([
 ])
 
 R, T, P, S = 4., 3., 2., 1.
-stag_hunt_3player_M3 = torch.tensor([  # M3: 3 players required to hunt a stag
-    [[ R,  S],   # Player 1: C, Player 2: C, Player 3: (C / D) -> (R / S)
-     [ S,  S]],  # Player 1: C, Player 2: D, Player 3: (C / D) -> (S / S)
+stag_hunt_3player_green = stag_hunt_3player_M2 = torch.tensor([  # M2: 2 players required to hunt a stag
+    [[ R,  R],   # Player 1: C, Player 2: C, Player 3: (C / D) -> (R / R)
+     [ R,  S]],  # Player 1: C, Player 2: D, Player 3: (C / D) -> (R / S)
 
-    [[ P,  P],   # Player 1: D, Player 2: C, Player 3: (C / D) -> (P / P)
+    [[ T,  P],   # Player 1: D, Player 2: C, Player 3: (C / D) -> (P / P)
      [ P,  P]],  # Player 1: D, Player 2: D, Player 3: (C / D) -> (P / P)
 ])
 
-stag_hunt_3player_M2 = torch.tensor([  # M2: 2 players required to hunt a stag
-    [[ R,  R],   # Player 1: C, Player 2: C, Player 3: (C / D) -> (R / R)
-     [ R,  S]],  # Player 1: C, Player 2: D, Player 3: (C / D) -> (R / S)
+stag_hunt_3player_red = stag_hunt_3player_M3 = torch.tensor([  # M3: 3 players required to hunt a stag
+    [[ R,  S],   # Player 1: C, Player 2: C, Player 3: (C / D) -> (R / S)
+     [ S,  S]],  # Player 1: C, Player 2: D, Player 3: (C / D) -> (S / S)
+
+    [[ T,  P],   # Player 1: D, Player 2: C, Player 3: (C / D) -> (P / P)
+     [ P,  P]],  # Player 1: D, Player 2: D, Player 3: (C / D) -> (P / P)
+])
+
+stag_hunt_3player_penalty = torch.tensor([  # M2: 2 players required to hunt a stag
+    [[ R,  S],   # Player 1: C, Player 2: C, Player 3: (C / D) -> (R / R)
+     [ S,  S]],  # Player 1: C, Player 2: D, Player 3: (C / D) -> (R / S)
 
     [[ P,  P],   # Player 1: D, Player 2: C, Player 3: (C / D) -> (P / P)
      [ P,  P]],  # Player 1: D, Player 2: D, Player 3: (C / D) -> (P / P)

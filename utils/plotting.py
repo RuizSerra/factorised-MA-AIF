@@ -428,35 +428,35 @@ def plot_efe(
         efe_plot = ax.plot(
             x_range, 
             efe_history[t_min:t_max, i, a], 
-            label='$G[\hat u=\mathtt{'+['c', 'd'][a]+'}]$',  color=ACTION_COLORS[a], linewidth=LINEWIDTH)
+            label='$G[\mathtt{'+['c', 'd'][a]+'}]$',  color=ACTION_COLORS[a], linewidth=LINEWIDTH)
         
         if plot_EFE_terms:
             # risk_plot = ax2.plot(
             #     x_range, 
             #     risk[t_min:t_max, i, a], 
-            #     label='$\mathcal{R}[\hat u=\mathtt{'+['c', 'd'][a]+'}]$', 
+            #     label='$\mathcal{R}[\mathtt{'+['c', 'd'][a]+'}]$', 
             #     color=ACTION_COLORS[a], 
             #     linestyle=':', linewidth=LINEWIDTH, alpha=0.5)
             # ambiguity_plot = ax2.plot(
             #     x_range, 
             #     ambiguity[t_min:t_max, i, a], 
-            #     label='$\mathcal{A}[\hat u=\mathtt{'+['c', 'd'][a]+'}]$', 
+            #     label='$\mathcal{A}[\mathtt{'+['c', 'd'][a]+'}]$', 
             #     color=ACTION_COLORS[a], 
             #     linestyle='--', linewidth=LINEWIDTH, alpha=0.5)
             pv_plot = ax2.plot(
                 x_range, 
                 -pragmatic_value[t_min:t_max, i, a], 
-                label=r'$-\rho[\hat u=\mathtt{'+['c', 'd'][a]+'}]$', 
+                label=r'$-\rho[\mathtt{'+['c', 'd'][a]+'}]$', 
                 color=ACTION_COLORS[a], linestyle=(0, (1, 5)), linewidth=LINEWIDTH, alpha=0.7)
             salience_plot = ax2.plot(
                 x_range, 
                 salience[t_min:t_max, i, a], 
-                label=r'$\varsigma[\hat u=\mathtt{'+['c', 'd'][a]+'}]$', 
+                label=r'$\varsigma[\mathtt{'+['c', 'd'][a]+'}]$', 
                 color=ACTION_COLORS[a], linestyle=(0, (5, 7)), linewidth=LINEWIDTH, alpha=0.7)
             novelty_plot = ax.plot(
                 x_range, 
                 novelty[t_min:t_max, i, a], 
-                label=r'$\eta[\hat u=\mathtt{'+['c', 'd'][a]+'}]$', color=ACTION_COLORS[a], linestyle=':', linewidth=LINEWIDTH
+                label=r'$\eta[\mathtt{'+['c', 'd'][a]+'}]$', color=ACTION_COLORS[a], linestyle=':', linewidth=LINEWIDTH
             )
 
     ax.set_title(f'EFE Agent {chr(105+i)}', fontsize=label_font_size)
@@ -948,38 +948,36 @@ def plot_B(B_history, i, t_min=0, t_max=None):
     num_players = B_history.shape[1]
     num_actions = B_history.shape[-1]
 
-    labels = [f'[{chr(105+j)}, {o}, {s}]' 
-        for j in range(num_players) 
-        for o in range(num_actions) 
+    labels = ['['+chr(105+j)+r', $\mathtt{'+['c', 'd'][u]+'}$, '+f'{s}, {s_}]' 
+        for j in range(num_players)
+        for u in range(num_actions)
+        for s_ in range(num_actions) 
         for s in range(num_actions)]
 
-    data_per_factor_and_action = [
-        B_history[t_min:t_max, i, :, u].reshape((t_max - t_min), -1).T
-        for u in range(num_actions)
-    ]
+    data = B_history[t_min:t_max, i, :, :].reshape((t_max - t_min), -1).T
 
-    for u_idx, data in enumerate(data_per_factor_and_action):
-        plt.figure(figsize=(2, 1))
-        ax = plt.gca()
-        cax = ax.imshow(
-            data,
-            vmin=0, vmax=1,
-            origin='upper', 
-            aspect='auto', 
-            interpolation='nearest',
-            cmap='inferno',
-        )
+    plt.figure(figsize=(4, 3))
+    ax = plt.gca()
+    cax = ax.imshow(
+        data,
+        vmin=0, vmax=1,
+        origin='upper', 
+        aspect='auto', 
+        interpolation='nearest',
+        cmap='inferno',
+    )
 
-        ax.set_title(r'$\boldsymbol{\mathsf{B}}_'+str(chr(105+i))+r'[u=\mathtt{'+str(chr(99+u_idx))+'}]$', fontsize=label_font_size)
-        ax.set_xlabel('Time step (t)', fontsize=label_font_size)
-        ax.set_xticks(range(0, t_max-t_min, int((t_max-t_min)/10)))
-        ax.set_xticklabels(range(t_min, t_max, int((t_max-t_min)/10)))
-        ax.set_yticks(range(len(labels)))
-        ax.set_yticklabels(labels)
-        if not ONLY_LEFT_Y_LABEL or (ONLY_LEFT_Y_LABEL and i == 0):
-            ax.set_ylabel(r'$\boldsymbol{\mathsf{B}}$', fontsize=label_font_size)
+    # ax.set_title(r'$\boldsymbol{\mathsf{B}}_{'+str(i+1)+'}$', fontsize=label_font_size)
+    ax.set_title(f'Transition model Agent {i+1}', fontsize=label_font_size)
+    ax.set_xlabel('Time step (t)', fontsize=label_font_size)
+    ax.set_xticks(range(0, t_max-t_min, int((t_max-t_min)/10)))
+    ax.set_xticklabels(range(t_min, t_max, int((t_max-t_min)/10)))
+    ax.set_yticks(range(len(labels)))
+    ax.set_yticklabels(labels)
+    if not ONLY_LEFT_Y_LABEL or (ONLY_LEFT_Y_LABEL and i == 0):
+        ax.set_ylabel(r'$\boldsymbol{\mathsf{B}}$', fontsize=label_font_size)
 
-        plt.show()
+    plt.show()
 
 
 

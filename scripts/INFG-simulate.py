@@ -169,20 +169,24 @@ if __name__ == '__main__':
         # ],
         [   
             ('Ch', chicken_2player, GAME_DURATION),
-            ('SH', stag_hunt_2player, GAME_DURATION),
+            ('SH', stag_hunt_2player, GAME_DURATION+1),
         ],
         [   
             ('Ch', chicken_3player, GAME_DURATION),
-            ('SH-g', stag_hunt_3player_M2, GAME_DURATION),
+            ('SH-g', stag_hunt_3player_green, GAME_DURATION+1),
         ],
         [   
             ('Ch', chicken_3player, GAME_DURATION),
-            ('SH-r', stag_hunt_3player_M3, GAME_DURATION),
+            ('SH-r', stag_hunt_3player_red, GAME_DURATION+1),
         ],
         [   
             ('Ch', chicken_3player, GAME_DURATION),
-            ('SH-g', stag_hunt_3player_M2, GAME_DURATION//2),
-            ('SH-r', stag_hunt_3player_M3, GAME_DURATION//2),
+            ('SH-p', stag_hunt_3player_penalty, GAME_DURATION+1),
+        ],
+        [   
+            ('Ch', chicken_3player, GAME_DURATION),
+            ('SH-g', stag_hunt_3player_green, GAME_DURATION//2),
+            ('SH-r', stag_hunt_3player_red, GAME_DURATION//2+1),
         ],
     ]
 
@@ -212,7 +216,7 @@ if __name__ == '__main__':
                 #     D_prior=[torch.tensor(p).float() for _ in range(num_players)],
                 # ),
                 dict(
-                    beta_1=100,
+                    beta_1=30,
                     # interoception=True,
                     A_prior=99,
                     A_learning=False,
