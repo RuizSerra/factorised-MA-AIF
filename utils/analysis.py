@@ -351,6 +351,106 @@ def extract_history_newest(variables_history, variable):
     else:
         raise ValueError("variables_history should be either a dictionary or a list of tuples containing dictionaries.")
 
+
+
+# ======================================================================================================================================================
+# EXTRACT ALL VARIABLES
+# ======================================================================================================================================================
+
+import numpy as np
+import pandas as pd
+from torch import Tensor
+
+def extract_history_all(variables_history):
+    """
+    Extracts history from a dictionary or a list of tuples and converts it to a DataFrame.
+    Supports dynamic extraction of all variables, gracefully handles multi-dimensional data by splitting 
+    into _C and _D components, and tracks repeats.
+    
+    Args:
+        variables_history (dict or list): A dictionary or a list of tuples containing agent variables.
+    
+    Returns:
+        pd.DataFrame: A DataFrame containing timestep, agent variables, and repeat indices (if applicable).
+    """
+    def flatten_multidimensional(value, varname, agent_id):
+        """
+        Flattens multi-dimensional data by extracting the first and last elements (C and D components).
+        If the data is 1-dimensional, it is returned as-is.
+        """
+        if value.ndim > 1:
+            # If it's a matrix, flatten and extract first and last element as C and D
+            flattened = value.flatten()
+            return {
+                f'agent_{agent_id}_{varname}_C': flattened[0],  # First element
+                f'agent_{agent_id}_{varname}_D': flattened[-1]  # Last element
+            }
+        else:
+            # Handle 1D array directly
+            return {f'agent_{agent_id}_{varname}': value}
+
+    def process_single_history(history, repeat=None):
+        """
+        Processes a single history dictionary and returns a DataFrame.
+        Extracts data for all variables and organizes them into a flattened structure.
+        """
+        data = {}
+        
+        for varname, values in history.items():
+            # Convert variable data to a NumPy array
+            values_array = np.array(values)
+            
+            # Determine the number of agents based on the second dimension
+            num_agents = values_array.shape[1]
+
+            # Loop over each agent and extract their data
+            for agent_id in range(num_agents):
+                agent_data = values_array[:, agent_id]
+
+                # Handle multi-dimensional data gracefully
+                flattened_data = flatten_multidimensional(agent_data, varname, agent_id)
+
+                # Add flattened data to the main dictionary
+                for key, value in flattened_data.items():
+                    if key not in data:
+                        data[key] = []
+                    data[key].append(value)
+
+        # Add 'Timestep' column
+        data['Timestep'] = np.arange(1, values_array.shape[0] + 1)
+
+        # Add 'Repeat' column if this is part of a repeated set
+        if repeat is not None:
+            data['Repeat'] = [repeat] * len(data['Timestep'])
+
+        return pd.DataFrame(data)
+
+    # Handle the case where variables_history is a dictionary
+    if isinstance(variables_history, dict):
+        return process_single_history(variables_history)
+
+    # Handle the case where variables_history is a list of tuples (repeatable format)
+    elif isinstance(variables_history, list):
+        all_data = []
+
+        for repeat_idx, repeat in enumerate(variables_history):
+            # Ensure each repeat is a tuple with at least two elements
+            if isinstance(repeat, tuple) and len(repeat) >= 2:
+                repeat_id, metrics_dict = repeat[0], repeat[1]
+            else:
+                raise ValueError("Each item in the list should be a tuple with at least two elements.")
+
+            # Process the dictionary part of the tuple and add repeat tracking
+            df_repeat = process_single_history(metrics_dict, repeat=repeat_id)
+            all_data.append(df_repeat)
+
+        # Concatenate all DataFrames from the repeats into a single DataFrame
+        final_df = pd.concat(all_data, ignore_index=True)
+        return final_df
+
+    else:
+        raise ValueError("variables_history should be either a dictionary or a list of tuples containing dictionaries.")
+
 # ======================================================================================================================================================
 # ENTROPY
 # ======================================================================================================================================================
@@ -1091,6 +1191,383 @@ def joint_entropy(data, action_suffix='_action'):
     # Plot heatmap or line graph based on data structure
     plot_joint_entropy(joint_entropy_df)
 
+# ======================================================================================================================================================
+# ENTROPY RATE
+# ======================================================================================================================================================
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from jpype import startJVM, getDefaultJVMPath, isJVMStarted, JPackage
+from matplotlib.ticker import MaxNLocator
+import os
+import warnings
+from scipy.signal import savgol_filter
+
+
+def calculate_base(actions):
+    """
+    Calculates the base for entropy rate as the number of unique distinct actions.
+
+    Parameters:
+    - actions: pandas Series containing action data.
+
+    Returns:
+    - Integer representing the base.
+    """
+    unique_actions = np.unique(actions.dropna().astype(int))  # Ensure no NaN values
+    base = len(unique_actions)
+    return base
+
+
+def entropy_rate_discrete(data, variable, base, history=1):
+    """
+    Calculate discrete entropy rate for a single variable.
+
+    Parameters:
+    - data: pandas DataFrame containing the data.
+    - variable: column name for which to calculate entropy rate.
+    - base: base for the discrete variables.
+    - history: length of the past context to condition on.
+
+    Returns:
+    - DataFrame with Entropy Rate (Bits) per timestep.
+    """
+    data_clean = data.replace([np.inf, -np.inf], np.nan).dropna(subset=[variable])
+    train = data_clean[variable].values.astype(int)
+
+    # from jpype import JPackage
+    # from jpype.types import JArray, JInt
+    # train = JArray(JInt)(train_np)
+
+    print(f"Train Data: {train}")
+    print(f"Type: {type(train)}")
+    print(f"Shape: {train.shape}")
+    print(f"Dtype: {train.dtype}")
+
+    # Set up the entropy rate calculator
+    calcClass = JPackage("infodynamics.measures.discrete").EntropyRateCalculatorDiscrete
+    calc = calcClass(base, history)
+
+    print(f'Base: {base}')
+    print(F'History: {history}')
+
+    # The initialise method requires an integer parameter, which is the history length
+    #calc.initialise(history)
+    calc.initialise(history)
+    calc.addObservations(train)
+
+    # Calculate entropy rate
+    local_result_nats = calc.computeLocalFromPreviousObservations(train)
+
+    # Convert nats to bits
+    local_result_bits = np.array(local_result_nats) / np.log(2)
+
+    # Return DataFrame
+    return pd.DataFrame({'Entropy_Rate_Bits': local_result_bits})
+
+
+def calculate_entropy_rate_discrete(data, action_suffix='_action', history=1):
+    """
+    Calculate entropy rate for each agent's actions. Handles both single runs and multiple repeats.
+
+    Parameters:
+    - data: pandas DataFrame containing the data.
+    - action_suffix: suffix used to identify action columns.
+    - history: length of the past context to condition on.
+
+    Returns:
+    - If 'Repeat' is not in data:
+        - DataFrame with columns ['Entropy_Rate_Bits', 'Agent', 'Timestep']
+      If 'Repeat' is in data:
+        - DataFrame with columns ['Agent', 'Timestep', 'Mean_Entropy_Rate', 'Std_Error']
+    """
+    action_columns = [col for col in data.columns if col.endswith(action_suffix)]
+    result_df_list = []
+
+    if 'Repeat' in data.columns:
+        # Multiple runs: Calculate entropy rate for each repeat
+        grouped = data.groupby('Repeat')
+        for repeat, group in grouped:
+            for agent_col in action_columns:
+                # Extract agent number (assuming format like 'agent_1_action')
+                agent_number = agent_col.split('_')[1]
+
+                # Calculate the base for this agent's actions
+                base = calculate_base(group[agent_col])
+
+                # Calculate local entropy rate
+                local_entropy_rate_df = entropy_rate_discrete(group, agent_col, base, history)
+
+                # Append agent number and timestep values
+                local_entropy_rate_df['Agent'] = agent_number
+                local_entropy_rate_df['Timestep'] = group['Timestep'].values[:len(local_entropy_rate_df)]
+                local_entropy_rate_df['Repeat'] = repeat
+                result_df_list.append(local_entropy_rate_df)
+
+        # Combine all results into a single DataFrame
+        combined_df = pd.concat(result_df_list, ignore_index=True)
+
+        # Calculate mean and standard error across repeats
+        aggregated_df = combined_df.groupby(['Agent', 'Timestep']).agg(
+            Mean_Entropy_Rate=('Entropy_Rate_Bits', 'mean'),
+            Std_Error=('Entropy_Rate_Bits', 'sem')
+        ).reset_index()
+
+        return aggregated_df
+    else:
+        # Single run: Calculate entropy rate normally
+        for agent_col in action_columns:
+            # Extract agent number
+            agent_number = agent_col.split('_')[1]
+
+            # Calculate the base for this agent's actions
+            base = calculate_base(data[agent_col])
+
+            # Calculate local entropy rate
+            local_entropy_rate_df = entropy_rate_discrete(data, agent_col, base, history)
+
+            # Append agent number and timestep values
+            local_entropy_rate_df['Agent'] = agent_number
+            local_entropy_rate_df['Timestep'] = data['Timestep'].values[:len(local_entropy_rate_df)]
+            result_df_list.append(local_entropy_rate_df)
+
+        # Combine all results into a single DataFrame
+        return pd.concat(result_df_list, ignore_index=True)
+
+
+def plot_entropy_rate_heatmap(entropy_rate_df, output_path=None):
+    """
+    Plot a heatmap or line graphs for the entropy rate values based on the DataFrame structure.
+
+    Parameters:
+    - entropy_rate_df: pandas DataFrame containing entropy rate measures.
+    - output_path: Optional; path to save the plot (without extension).
+    """
+    if {'Mean_Entropy_Rate', 'Std_Error'}.issubset(entropy_rate_df.columns):
+        # Data has 'Repeat' column: Plot average entropy rate with standard error as separate subplots
+        plot_entropy_rate_linegraphs_subplots(entropy_rate_df, output_path)
+    else:
+        # Single run: Plot heatmap
+        plot_entropy_rate_heatmap_single(entropy_rate_df, output_path)
+
+
+def plot_entropy_rate_heatmap_single(entropy_rate_df, output_path=None):
+    """
+    Plot a heatmap for the entropy rate values (single run).
+
+    Parameters:
+    - entropy_rate_df: pandas DataFrame containing entropy rate measures.
+    - output_path: Optional; path to save the plot (without extension).
+    """
+    # Create a pivot table for heatmap plotting
+    pivot_table = entropy_rate_df.pivot_table(
+        index='Agent',
+        columns='Timestep',
+        values='Entropy_Rate_Bits',
+        aggfunc='mean'
+    )
+
+    # Set up colormap and gridspec for plotting
+    cmap = sns.color_palette("viridis", as_cmap=True)
+    fig = plt.figure(figsize=(10, 8), dpi=300)
+    gs = plt.GridSpec(1, 2, width_ratios=[20, 1])  # Ratio of heatmap and colorbar
+
+    # Heatmap
+    ax = plt.subplot(gs[0])
+    sns.heatmap(pivot_table, cmap=cmap, cbar=False, ax=ax, linewidths=0)
+
+    # Set axis labels and title using the updated font settings
+    ax.set_xlabel('Time', labelpad=10)
+    ax.set_ylabel('Agent', labelpad=10)
+    ax.set_title('Entropy Rate', pad=15)
+
+    # Ticks and labels
+    ax.set_yticks(np.arange(len(pivot_table.index)) + 0.5)
+    ax.set_yticklabels(pivot_table.index)
+    ax.xaxis.set_major_locator(MaxNLocator(integer=True, prune='both', nbins=6))
+    ax.set_xticklabels([int(tick) for tick in ax.get_xticks()])
+
+    # Colorbar
+    cbar_ax = plt.subplot(gs[1])
+    norm = plt.Normalize(vmin=pivot_table.values.min(), vmax=pivot_table.values.max())
+    sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+    sm.set_array([])
+    cbar = plt.colorbar(sm, cax=cbar_ax)
+    cbar.ax.tick_params(labelsize=14)
+    cbar.set_label('Entropy Rate (Bits)', size=18)
+
+    # Adjust layout
+    plt.tight_layout(rect=[0, 0, 1, 0.95])
+
+    # Save the figure
+    if output_path is not None:
+        plt.savefig(f'{output_path}.pdf', format='pdf', bbox_inches='tight')
+        plt.savefig(f'{output_path}.png', format='png', dpi=300, bbox_inches='tight')
+
+    # Show plot
+    plt.show()
+
+
+def plot_entropy_rate_linegraphs_subplots(
+    aggregated_df,
+    output_path=None,
+    use_savgol=False,
+    savgol_window=21,
+    savgol_polyorder=2
+):
+    """
+    Plot separate line graphs for each agent showing average entropy rate with standard error shading,
+    with optional Savitzky-Golay smoothing for smoother lines and shading.
+
+    Parameters:
+    - aggregated_df: pandas DataFrame containing ['Agent', 'Timestep', 'Mean_Entropy_Rate', 'Std_Error']
+    - output_path: Optional; path to save the plot (without extension).
+    - use_savgol: Boolean; if True, apply Savitzky-Golay filter to smooth the data.
+    - savgol_window: Window length for Savitzky-Golay filter (must be a positive odd integer and <= number of data points).
+    - savgol_polyorder: Polynomial order for Savitzky-Golay filter (must be less than savgol_window).
+    """
+    agents = aggregated_df['Agent'].unique()
+    num_agents = len(agents)
+
+    # Define figure size: width proportional to number of agents, height fixed
+    width_per_agent = 6
+    height = 6
+    sns.set(style="whitegrid")
+
+    # Create a subplot for each agent
+    fig, axes = plt.subplots(
+        1, num_agents,
+        figsize=(width_per_agent * num_agents, height),
+        sharey=True
+    )
+
+    # If only one agent, axes is not a list
+    if num_agents == 1:
+        axes = [axes]
+
+    # Define a color palette
+    palette = sns.color_palette("viridis", n_colors=num_agents)
+    color_dict = dict(zip(agents, palette))
+
+    for ax, agent in zip(axes, agents):
+        agent_data = aggregated_df[aggregated_df['Agent'] == agent].sort_values('Timestep')
+
+        # Original timesteps and data
+        x = agent_data['Timestep'].values
+        y = agent_data['Mean_Entropy_Rate'].values
+        y_err = agent_data['Std_Error'].values
+
+        if use_savgol:
+            # Validate Savitzky-Golay parameters
+            if savgol_window % 2 == 0 or savgol_window <= 0:
+                warnings.warn(
+                    f"Agent {agent}: Savitzky-Golay window size must be a positive odd integer. "
+                    f"Received window={savgol_window}. Skipping Savitzky-Golay filtering."
+                )
+                y_smooth = y
+                y_err_smooth = y_err
+            elif savgol_window > len(x):
+                warnings.warn(
+                    f"Agent {agent}: Savitzky-Golay window size ({savgol_window}) is larger than the number of data points ({len(x)}). "
+                    f"Skipping Savitzky-Golay filtering."
+                )
+                y_smooth = y
+                y_err_smooth = y_err
+            elif savgol_polyorder >= savgol_window:
+                warnings.warn(
+                    f"Agent {agent}: Savitzky-Golay polyorder ({savgol_polyorder}) must be less than window size ({savgol_window}). "
+                    f"Skipping Savitzky-Golay filtering."
+                )
+                y_smooth = y
+                y_err_smooth = y_err
+            else:
+                try:
+                    # Apply Savitzky-Golay filter
+                    y_smooth = savgol_filter(y, window_length=savgol_window, polyorder=savgol_polyorder)
+                    y_err_smooth = savgol_filter(y_err, window_length=savgol_window, polyorder=savgol_polyorder)
+                except Exception as e:
+                    warnings.warn(
+                        f"Agent {agent}: Savitzky-Golay filtering failed with error: {e}. "
+                        f"Skipping Savitzky-Golay filtering."
+                    )
+                    y_smooth = y
+                    y_err_smooth = y_err
+        else:
+            # No smoothing; use original data
+            y_smooth = y
+            y_err_smooth = y_err
+
+        # Plot the mean entropy rate with a thinner line
+        ax.plot(
+            x,
+            y_smooth,
+            label=f'Agent {agent}',
+            color=color_dict[agent],
+            linewidth=1  # Thinner lines
+        )
+
+        # Shade the standard error with adjusted transparency
+        ax.fill_between(
+            x,
+            y_smooth - y_err_smooth,
+            y_smooth + y_err_smooth,
+            color=color_dict[agent],
+            alpha=0.2  # Increased alpha for better visibility
+        )
+
+        ax.set_title(f'Agent {agent}', fontsize=18)
+        ax.set_xlabel('Time', fontsize=16)
+        if ax == axes[0]:
+            ax.set_ylabel('Entropy Rate (Bits)', fontsize=16)
+        else:
+            ax.set_ylabel('')
+        ax.tick_params(axis='both', which='major', labelsize=14)
+        ax.legend().set_visible(False)  # Hide individual legends
+
+    # Create a single legend for all subplots
+    handles = [plt.Line2D([0], [0], color=color_dict[agent], lw=2) for agent in agents]
+    labels = [f'Agent {agent}' for agent in agents]
+    fig.legend(handles, labels, loc='upper right', fontsize=16, title='Agents', title_fontsize=18)
+
+    plt.suptitle('Average Entropy Rate with Standard Error', fontsize=20, y=0.95)
+    plt.tight_layout(rect=[0, 0, 1, 0.92])
+
+    # Save the figure
+    if output_path is not None:
+        plt.savefig(f'{output_path}.pdf', format='pdf', bbox_inches='tight')
+        plt.savefig(f'{output_path}.png', format='png', dpi=300, bbox_inches='tight')
+
+    # Show plot
+    plt.show()
+
+
+def entropy_rate(data, action_suffix='_action', history=1):
+    """
+    Main function to calculate and plot entropy rate heatmap or line graphs based on the presence of 'Repeat' column.
+
+    Parameters:
+    - data: pandas DataFrame containing the data.
+    - action_suffix: suffix used to identify action columns.
+    - history: length of the past context to condition on.
+    """
+
+    # Plot settings
+    plt.rcParams['font.family'] = 'serif'
+    plt.rcParams['font.serif'] = 'cmr10'  # Use the Computer Modern Roman font
+    plt.rcParams['mathtext.fontset'] = 'cm'  # Use Computer Modern for math text
+    plt.rcParams['axes.formatter.use_mathtext'] = True
+    plt.rcParams['axes.labelsize'] = 16  # Axis labels
+    plt.rcParams['axes.titlesize'] = 20  # Title
+    plt.rcParams['xtick.labelsize'] = 14  # X tick labels
+    plt.rcParams['ytick.labelsize'] = 14  # Y tick labels
+
+    # Calculate entropy rate
+    entropy_rate_df = calculate_entropy_rate_discrete(data, action_suffix, history)
+
+    # Plot heatmap or line graphs based on data structure
+    plot_entropy_rate_heatmap(entropy_rate_df)
 
 # ======================================================================================================================================================
 # CONDITIONAL MUTUAL INFORMATION 
@@ -2112,6 +2589,401 @@ def predictive_information(data, action_suffix='_action', past_window=1, future_
         # Otherwise, use the original heatmap plot
         plot_pi_heatmap(aggregated_df)
 
+    return aggregated_df
+
+
+
+# ======================================================================================================================================================
+# AUTOCORRELATION
+# ======================================================================================================================================================
+
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.feature_selection import mutual_info_regression
+from statsmodels.graphics.tsaplots import plot_pacf
+
+def compute_mi_pacf(data, target, lags=10):
+    """
+    Compute the Mutual Information (MI) between a target column and its lagged versions.
+    """
+    mi_values = []
+
+    # Compute MI for each lag
+    for lag in range(1, lags + 1):
+        # Shift the target column by the current lag
+        shifted_target = data[target].shift(lag).iloc[lag:].values.reshape(-1, 1)
+        current_values = data[target].iloc[lag:].values.reshape(-1, 1)
+        
+        # Compute mutual information for the current lag
+        mi = mutual_info_regression(shifted_target, current_values, discrete_features=True)
+        mi_values.append(mi[0])
+
+    return mi_values
+
+def ACF(data, target, lags=10):
+    """
+    Plot the PACF and the MI-based equivalent of PACF (mutual information decay).
+    """
+    fig, axes = plt.subplots(1, 2, figsize=(15, 6))
+
+    # Plot PACF
+    plot_pacf(data[target], lags=lags, ax=axes[0])
+    axes[0].set_title(f'PACF of {target}', fontsize=16)
+    axes[0].set_xlabel('Lags', fontsize=14)
+    axes[0].set_ylabel('Partial Autocorrelation', fontsize=14)
+
+    # Compute and plot MI-based PACF
+    mi_values = compute_mi_pacf(data, target, lags=lags)
+    axes[1].plot(range(1, lags + 1), mi_values, marker='o', linestyle='-', color='b')
+    axes[1].set_title(f'Mutual Information Decay of {target}', fontsize=16)
+    axes[1].set_xlabel('Lags', fontsize=14)
+    axes[1].set_ylabel('Mutual Information (Bits)', fontsize=14)
+
+    plt.tight_layout()
+    plt.show()
+
+# Example usage
+# Assuming `data` is a DataFrame with your state columns
+
+
+# ======================================================================================================================================================
+# AUTONOMY
+# ======================================================================================================================================================
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from matplotlib import gridspec
+from jpype import JPackage, JArray, JInt
+from matplotlib.ticker import MaxNLocator
+from scipy.signal import savgol_filter
+import warnings
+
+def initialize_cmi_calculator():
+    """
+    Initialize the Conditional Mutual Information calculator from JIDT.
+    """
+    calcClass = JPackage("infodynamics.measures.discrete").ConditionalMutualInformationCalculatorDiscrete
+    return calcClass(2, 2, 2)  # Base-2 for binary states
+
+def calculate_local_autonomy(data, agent_col, other_agent_cols, k, calc):
+    """
+    Calculate the local autonomy (CMI) for a single agent:
+    A_m = MI(S_{t+1} : S_t | Joint_Environment).
+    """
+    s_t = JArray(JInt)(data[agent_col].iloc[:-1].values.astype(int).tolist())
+    s_t_plus_1 = JArray(JInt)(data[agent_col].iloc[1:].values.astype(int).tolist())
+
+    # Prepare the joint environment from all other agents across k lags
+    env_data = []
+    for lag in range(k + 1):
+        for other_col in other_agent_cols:
+            env_data.append(data[other_col].shift(lag).iloc[1:].values.astype(int))
+
+    joint_env = JArray(JInt)(np.array(env_data).T.flatten().tolist())
+
+    # Initialize the calculator
+    calc.initialise()
+    calc.addObservations(s_t, s_t_plus_1, joint_env)
+
+    # Compute and return local autonomy
+    return calc.computeLocal(s_t_plus_1, s_t, joint_env)
+
+def calculate_local_autonomy_for_all_agents(data, state_suffix, k):
+    """
+    Calculate autonomy for all agents based on CMI between t+1 and t states.
+    """
+    state_columns = [col for col in data.columns if col.endswith(state_suffix)]
+    calc = initialize_cmi_calculator()
+
+    result_df_list = []
+
+    for agent_col in state_columns:
+        other_agent_cols = [col for col in state_columns if col != agent_col]
+        local_autonomy = calculate_local_autonomy(data, agent_col, other_agent_cols, k, calc)
+
+        # Prepare DataFrame for this agent
+        try:
+            agent_number = agent_col.split('_')[1]
+        except IndexError:
+            warnings.warn(
+                f"Agent column '{agent_col}' does not follow the expected format 'agent_X_action'. Skipping."
+            )
+            continue
+
+        # Use data['Timestep'].values[1:] because local_autonomy is of length len(data) - 1
+        agent_df = pd.DataFrame({
+            'Autonomy': local_autonomy,
+            'Agent': agent_number,
+            'Timestep': data['Timestep'].values[1:]  # Correctly align Timestep with local_autonomy
+        })
+
+        result_df_list.append(agent_df)
+
+    if not result_df_list:
+        warnings.warn("No valid autonomy calculations were performed due to incorrect column naming.")
+        return pd.DataFrame()
+
+    # Combine all agent data
+    autonomy_df = pd.concat(result_df_list, ignore_index=True)
+
+    return autonomy_df
+
+def calculate_autonomy_with_repeats(data, state_suffix='_action', k=2):
+    """
+    Calculates autonomy for each agent, with handling for experimental repeats.
+    """
+    result_df_list = []
+
+    if 'Repeat' in data.columns:
+        # Multiple runs: Calculate autonomy for each repeat
+        grouped = data.groupby('Repeat')
+        for repeat, group in grouped:
+            group = group.copy()
+            group['Timestep'] = np.arange(1, len(group) + 1)  # Reset Timestep per repeat
+            autonomy_df = calculate_local_autonomy_for_all_agents(group, state_suffix, k)
+            autonomy_df['Repeat'] = repeat
+            result_df_list.append(autonomy_df)
+
+        if not result_df_list:
+            warnings.warn("No valid autonomy calculations were performed due to incorrect column naming.")
+            return pd.DataFrame()
+
+        # Combine all results into a single DataFrame
+        combined_df = pd.concat(result_df_list, ignore_index=True)
+
+        # Ensure 'Autonomy' column is numeric
+        combined_df['Autonomy'] = pd.to_numeric(combined_df['Autonomy'], errors='coerce')
+        combined_df = combined_df.dropna(subset=['Autonomy'])
+
+        # Now we group by 'Agent' and 'Timestep' ONLY to average over repeats
+        aggregated_df = combined_df.groupby(['Agent', 'Timestep']).agg(
+            Mean_Autonomy=('Autonomy', 'mean'),
+            Std_Error=('Autonomy', 'sem')
+        ).reset_index()
+
+        return aggregated_df
+    else:
+        # Single run: Just calculate and return
+        group = data.copy()
+        group['Timestep'] = np.arange(1, len(group) + 1)
+        autonomy_df = calculate_local_autonomy_for_all_agents(group, state_suffix, k)
+        return autonomy_df
+
+def plot_autonomy(autonomy_df):
+    """
+    Plot autonomy either as heatmap (single run) or line graphs (multiple repeats).
+    """
+    if {'Mean_Autonomy', 'Std_Error'}.issubset(autonomy_df.columns):
+        # Multiple repeats: plot line graphs
+        plot_autonomy_linegraphs_subplots(autonomy_df)
+    else:
+        # Single run: plot heatmap
+        plot_autonomy_heatmap_single(autonomy_df)
+
+def plot_autonomy_heatmap_single(autonomy_df):
+    """
+    Plot a heatmap for the autonomy values (single run).
+    """
+    if autonomy_df.empty:
+        warnings.warn("No data available to plot the heatmap.")
+        return
+
+    # Create a pivot table for heatmap plotting
+    pivot_table = autonomy_df.pivot_table(
+        index='Agent',
+        columns='Timestep',
+        values='Autonomy',
+        aggfunc='mean'
+    )
+
+    if pivot_table.empty:
+        warnings.warn("Pivot table is empty. Check your data.")
+        return
+
+    # Set up colormap and gridspec for plotting
+    cmap = sns.color_palette("viridis", as_cmap=True)
+    sns.set(style="whitegrid")
+    fig = plt.figure(figsize=(10, 8), dpi=300)
+    gs = gridspec.GridSpec(1, 2, width_ratios=[20, 1])  # Ratio of heatmap and colorbar
+
+    # Heatmap
+    ax = plt.subplot(gs[0])
+    sns.heatmap(pivot_table, cmap=cmap, cbar=False, ax=ax, linewidths=0)
+
+    # Set axis labels and title
+    ax.set_xlabel('Time', fontsize=20, labelpad=10)
+    ax.set_ylabel('Agent', fontsize=20, labelpad=10)
+    ax.set_title('Autonomy Heatmap (Local Conditional MI)', fontsize=24, pad=15)
+
+    # Ticks and labels
+    ax.set_yticks(np.arange(len(pivot_table.index)) + 0.5)
+    ax.set_yticklabels(pivot_table.index, fontsize=16)
+    ax.xaxis.set_major_locator(MaxNLocator(integer=True, prune='both', nbins=6))
+    ax.set_xticklabels([int(tick) for tick in ax.get_xticks()], fontsize=16)
+
+    # Colorbar
+    cbar_ax = plt.subplot(gs[1])
+    norm = plt.Normalize(vmin=pivot_table.values.min(), vmax=pivot_table.values.max())
+    sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+    sm.set_array([])
+    cbar = plt.colorbar(sm, cax=cbar_ax)
+    cbar.ax.tick_params(labelsize=16)
+    cbar.set_label('Autonomy (Bits)', size=18)
+
+    # Adjust layout
+    plt.tight_layout(rect=[0, 0, 1, 0.95])
+
+    # Show plot
+    plt.show()
+
+def plot_autonomy_linegraphs_subplots(
+    aggregated_df, 
+    use_savgol=False,
+    savgol_window=21,
+    savgol_polyorder=2
+):
+    """
+    Plot separate line graphs for each agent showing average autonomy with standard error shading,
+    with optional Savitzky-Golay smoothing for smoother lines and shading.
+    """
+    agents = aggregated_df['Agent'].unique()
+    num_agents = len(agents)
+
+    if num_agents == 0:
+        warnings.warn("No agents found in the data to plot.")
+        return
+
+    # Define figure size: width proportional to number of agents, height fixed
+    width_per_agent = 6
+    height = 6
+    total_width = width_per_agent * num_agents
+    sns.set(style="whitegrid")
+
+    # Create a subplot for each agent
+    fig, axes = plt.subplots(
+        1, num_agents, 
+        figsize=(width_per_agent * num_agents, height), 
+        sharey=True
+    )
+
+    # If only one agent, axes is not a list
+    if num_agents == 1:
+        axes = [axes]
+
+    # Define a color palette
+    palette = sns.color_palette("viridis", n_colors=num_agents)
+    color_dict = dict(zip(agents, palette))
+
+    for ax, agent in zip(axes, agents):
+        agent_data = aggregated_df[aggregated_df['Agent'] == agent].sort_values('Timestep')
+
+        if agent_data.empty:
+            warnings.warn(f"No data available for Agent {agent}. Skipping plot.")
+            continue
+
+        # Original timesteps and data
+        x = agent_data['Timestep'].values
+        y = agent_data['Mean_Autonomy'].values
+        y_err = agent_data['Std_Error'].values
+
+        if use_savgol:
+            # Validate Savitzky-Golay parameters
+            if savgol_window % 2 == 0 or savgol_window <= 0:
+                warnings.warn(
+                    f"Agent {agent}: Savitzky-Golay window size must be a positive odd integer. "
+                    f"Received window={savgol_window}. Skipping Savitzky-Golay filtering."
+                )
+                y_smooth = y
+                y_err_smooth = y_err
+            elif savgol_window > len(x):
+                warnings.warn(
+                    f"Agent {agent}: Savitzky-Golay window size ({savgol_window}) is larger than the number of data points ({len(x)}). "
+                    f"Skipping Savitzky-Golay filtering."
+                )
+                y_smooth = y
+                y_err_smooth = y_err
+            elif savgol_polyorder >= savgol_window:
+                warnings.warn(
+                    f"Agent {agent}: Savitzky-Golay polyorder ({savgol_polyorder}) must be less than window size ({savgol_window}). "
+                    f"Skipping Savitzky-Golay filtering."
+                )
+                y_smooth = y
+                y_err_smooth = y_err
+            else:
+                try:
+                    # Apply Savitzky-Golay filter
+                    y_smooth = savgol_filter(y, window_length=savgol_window, polyorder=savgol_polyorder)
+                    y_err_smooth = savgol_filter(y_err, window_length=savgol_window, polyorder=savgol_polyorder)
+                except Exception as e:
+                    warnings.warn(
+                        f"Agent {agent}: Savitzky-Golay filtering failed with error: {e}. "
+                        f"Skipping Savitzky-Golay filtering."
+                    )
+                    y_smooth = y
+                    y_err_smooth = y_err
+        else:
+            # No smoothing; use original data
+            y_smooth = y
+            y_err_smooth = y_err
+
+        # Plot the mean autonomy with a thinner line
+        ax.plot(
+            x,
+            y_smooth,
+            label=f'Agent {agent}',
+            color=color_dict[agent],
+            linewidth=1.5  # Adjusted line width for better visibility
+        )
+
+        # Shade the standard error with adjusted transparency
+        ax.fill_between(
+            x,
+            y_smooth - y_err_smooth,
+            y_smooth + y_err_smooth,
+            color=color_dict[agent],
+            alpha=0.3  # Adjusted alpha for better visibility
+        )
+
+        ax.set_title(f'Agent {agent}', fontsize=18)
+        ax.set_xlabel('Time', fontsize=16)
+        if ax == axes[0]:
+            ax.set_ylabel('Autonomy (Bits)', fontsize=16)
+        else:
+            ax.set_ylabel('')
+        ax.tick_params(axis='both', which='major', labelsize=14)
+        ax.legend().set_visible(False)  # Hide individual legends
+
+    # Create a single legend for all subplots
+    handles = [plt.Line2D([0], [0], color=color_dict[agent], lw=2) for agent in agents]
+    labels = [f'Agent {agent}' for agent in agents]
+    fig.legend(handles, labels, loc='upper right', fontsize=16, title='Agents', title_fontsize=18)
+
+    plt.suptitle('Average Autonomy with Standard Error', fontsize=20, y=0.95)
+    plt.tight_layout(rect=[0, 0, 1, 0.92])
+
+    # Show plot
+    plt.show()
+
+def autonomy(data, state_suffix='_action', k=2):
+    """
+    Main function to calculate autonomy and plot results.
+    """
+    aggregated_df = calculate_autonomy_with_repeats(data, state_suffix, k)
+
+    if aggregated_df.empty:
+        warnings.warn("Autonomy calculation returned an empty DataFrame. No plots will be generated.")
+        return
+
+    # Plot autonomy based on the presence of 'Mean_Autonomy' and 'Std_Error' columns
+    plot_autonomy(aggregated_df)
+
+
+
+
 # ======================================================================================================================================================
 # CONTINUOUS ENTROPY USING KOZACHENKO-LEONENKO ESTIMATOR
 # ======================================================================================================================================================
@@ -2542,6 +3414,7 @@ def entropy_continuous_multivariate(data, action_columns):
 
     # Convert nats to bits
     local_result_bits = np.array(local_result_nats) / np.log(2)
+    local_result_bits = local_result_nats
 
     return local_result_bits
 
@@ -4905,3 +5778,723 @@ def multi_information_cont(data, action_suffix='_action'):
 
     # Plot heatmap or line graph based on data structure
     plot_multi_information(multi_information_df)
+
+
+
+# ======================================================================================================================================================
+# O-INFORMATION: KSG
+# ======================================================================================================================================================
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from matplotlib import gridspec
+from matplotlib.ticker import MaxNLocator
+from jpype import JPackage, startJVM, isJVMStarted, getDefaultJVMPath
+import warnings
+from scipy.signal import savgol_filter
+
+def o_information_continuous_multivariate(data, action_columns):
+    import jpype
+    import jpype.imports
+    from jpype.types import JArray, JDouble
+    import numpy as np
+
+    """
+    Calculate O-information using the Kraskov estimator for continuous variables.
+    This version uses JPype to call the Java class.
+
+    Parameters:
+    - data: pandas DataFrame containing the data.
+    - action_columns: List of column names representing the continuous variables for O-information calculation.
+
+    Returns:
+    - NumPy array with O-Information (Bits) per observation.
+    """
+    # Clean the data by removing infinities and NaNs
+    data_clean = data.replace([np.inf, -np.inf], np.nan).dropna(subset=action_columns)
+
+    # Ensure combined_actions is a 2D array (n_observations x n_variables)
+    combined_actions = data_clean[action_columns].values.astype(float)
+
+    # Import the required Java class
+    from infodynamics.measures.continuous.kraskov import OInfoCalculatorKraskov
+
+    # Initialize the calculator
+    calc = OInfoCalculatorKraskov()
+    num_dimensions = combined_actions.shape[1]
+    calc.initialise(num_dimensions)
+
+    # Convert combined_actions to a JArray of JDouble (2D array)
+    combined_actions_jarray = JArray(JArray(JDouble))(len(combined_actions))
+    for i, row in enumerate(combined_actions):
+        combined_actions_jarray[i] = JArray(JDouble)(row)
+
+    # Supply the observations
+    calc.setObservations(combined_actions_jarray)
+
+    # Compute local O-information in nats
+    local_result_nats = calc.computeLocalOfPreviousObservations()
+
+    # Convert nats to bits
+    local_result_bits = np.array(local_result_nats) / np.log(2)
+
+    return local_result_bits
+
+
+def calculate_o_information_continuous(data, action_suffix='_action'):
+    """
+    Calculates O-information over all agents' actions or variables.
+    Handles both single runs and multiple repeats.
+
+    Parameters:
+    - data: pandas DataFrame containing the data.
+    - action_suffix: Suffix used to identify action columns.
+
+    Returns:
+    - If 'Repeat' is not in data:
+        - DataFrame with columns ['O_Information_Bits', 'Timestep']
+      If 'Repeat' is in data:
+        - DataFrame with columns ['Timestep', 'Mean_O_Information', 'Std_Error']
+    """
+    # Find all agent action columns
+    action_columns = [col for col in data.columns if col.endswith(action_suffix)]
+    result_df_list = []
+
+    if 'Repeat' in data.columns:
+        # Multiple runs: Calculate O-information for each repeat
+        grouped = data.groupby('Repeat')
+        for repeat, group in grouped:
+            # Ensure the group is sorted by Timestep
+            group_sorted = group.sort_values('Timestep')
+
+            # Calculate O-information for the continuous variables
+            o_information_bits = o_information_continuous_multivariate(group_sorted, action_columns)
+
+            # Create a DataFrame for the O-information values
+            o_information_df = pd.DataFrame({
+                'O_Information_Bits': o_information_bits,
+                'Timestep': group_sorted['Timestep'].values[:len(o_information_bits)],
+                'Repeat': repeat
+            })
+            result_df_list.append(o_information_df)
+
+        # Combine all results into a single DataFrame
+        combined_df = pd.concat(result_df_list, ignore_index=True)
+
+        # Calculate mean and standard error across repeats for each timestep
+        aggregated_df = combined_df.groupby('Timestep').agg(
+            Mean_O_Information=('O_Information_Bits', 'mean'),
+            Std_Error=('O_Information_Bits', 'sem')
+        ).reset_index()
+
+        return aggregated_df
+    else:
+        # Single run: Calculate O-information normally
+        # Ensure the data is sorted by Timestep
+        data_sorted = data.sort_values('Timestep')
+
+        # Calculate O-information for the continuous variables
+        o_information_bits = o_information_continuous_multivariate(data_sorted, action_columns)
+
+        # Create a DataFrame for the O-information values
+        o_information_df = pd.DataFrame({
+            'O_Information_Bits': o_information_bits,
+            'Timestep': data_sorted['Timestep'].values[:len(o_information_bits)]
+        })
+
+        return o_information_df
+
+def plot_o_information(o_information_df, output_path=None):
+    """
+    Plots a heatmap or line graph for the O-information values based on the DataFrame structure.
+
+    Parameters:
+    - o_information_df: pandas DataFrame containing O-information measures.
+    - output_path: Optional; path to save the plot (without extension).
+    """
+    if {'Mean_O_Information', 'Std_Error'}.issubset(o_information_df.columns):
+        # Data has multiple repeats: Plot average O-information with standard error as a line graph
+        plot_o_information_linegraph(o_information_df, output_path)
+    else:
+        # Single run: Plot heatmap
+        plot_o_information_heatmap_single(o_information_df, output_path)
+
+def plot_o_information_heatmap_single(o_information_df, output_path=None):
+    """
+    Plots a heatmap of O-information values over timesteps (single run).
+
+    Parameters:
+    - o_information_df: pandas DataFrame containing O-information measures.
+    - output_path: Optional; path to save the plot (without extension).
+    """
+    # Create a pivot table for heatmap plotting
+    pivot_table = o_information_df.pivot_table(
+        index='Timestep',
+        values='O_Information_Bits',
+        aggfunc='mean'
+    ).T  # Transpose to have Timesteps on x-axis
+
+    # Define a custom colormap
+    cmap = sns.color_palette("viridis", as_cmap=True)
+
+    # Create a gridspec layout to control the colorbar and heatmap separately
+    fig = plt.figure(figsize=(10, 2), dpi=300)  # Wide and not very tall
+    gs = gridspec.GridSpec(1, 2, width_ratios=[20, 1])  # 20:1 ratio between heatmap and colorbar
+
+    # Create the heatmap in the first grid cell
+    ax = plt.subplot(gs[0])
+    sns.heatmap(pivot_table, cmap=cmap, cbar=False, ax=ax, linewidths=0, cbar_kws={"shrink": 0.5})
+
+    # Set axis labels and title with the appropriate sizes
+    ax.set_xlabel('Time', fontsize=12, labelpad=5)
+    ax.set_ylabel('O-Information', fontsize=12, labelpad=5)  # Keep axis label as 'O-Information'
+    ax.set_title('O-Information Over Time', fontsize=14, pad=10)
+
+    # Set the y-tick label to 'O-Information' without changing the axis label
+    ax.set_yticks([0.5])  # Only one y-tick for "O-Information"
+    ax.set_yticklabels(['O-Information'], fontsize=10)
+
+    # Ensure that all labels are shown on x-axis, and ticks are centered in the middle of each cell
+    ax.xaxis.set_major_locator(MaxNLocator(integer=True, prune='both', nbins=6))
+    ax.set_xticklabels([int(tick) for tick in ax.get_xticks()], fontsize=10)
+
+    # Create the colorbar in the second grid cell
+    cbar_ax = plt.subplot(gs[1])
+    norm = plt.Normalize(vmin=pivot_table.values.min(), vmax=pivot_table.values.max())
+    sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+    sm.set_array([])
+    cbar = plt.colorbar(sm, cax=cbar_ax, orientation='vertical')
+    cbar.ax.tick_params(labelsize=10)
+    cbar.set_label('O-Information (Bits)', size=12)
+
+    # Adjust layout for a clean look
+    plt.tight_layout(rect=[0, 0, 1, 0.95])
+
+    # Save the figure in high-resolution formats (PDF and PNG)
+    if output_path is not None:
+        plt.savefig(f'{output_path}.pdf', format='pdf', bbox_inches='tight')
+        plt.savefig(f'{output_path}.png', format='png', dpi=300, bbox_inches='tight')
+
+    plt.show()
+
+def plot_o_information_linegraph(
+    aggregated_df, 
+    output_path=None, 
+    use_savgol=False,
+    savgol_window=21,
+    savgol_polyorder=3
+):
+    """
+    Plots a line graph of average O-information with standard error shading, 
+    with optional Savitzky-Golay smoothing.
+
+    Parameters:
+    - aggregated_df: pandas DataFrame containing ['Timestep', 'Mean_O_Information', 'Std_Error']
+    - output_path: Optional; path to save the plot (without extension).
+    - use_savgol: Boolean; if True, apply Savitzky-Golay filter to smooth the data.
+    - savgol_window: Window length for Savitzky-Golay filter (must be a positive odd integer and <= number of data points).
+    - savgol_polyorder: Polynomial order for Savitzky-Golay filter (must be less than savgol_window).
+    """
+    # Validate input DataFrame
+    required_columns = {'Timestep', 'Mean_O_Information', 'Std_Error'}
+    if not required_columns.issubset(aggregated_df.columns):
+        raise ValueError(f"Input DataFrame must contain columns: {required_columns}")
+
+    # Sort DataFrame by 'Timestep'
+    aggregated_df = aggregated_df.sort_values('Timestep')
+
+    # Extract data
+    x = aggregated_df['Timestep'].values
+    y = aggregated_df['Mean_O_Information'].values
+    y_err = aggregated_df['Std_Error'].values
+
+    # Apply Savitzky-Golay filter if enabled
+    if use_savgol:
+        # Validate Savitzky-Golay parameters
+        if not isinstance(savgol_window, int) or savgol_window <= 0 or savgol_window % 2 == 0:
+            warnings.warn(
+                f"Savitzky-Golay window size must be a positive odd integer. "
+                f"Received window={savgol_window}. Skipping Savitzky-Golay filtering."
+            )
+            y_smooth = y
+            y_err_smooth = y_err
+        elif savgol_window > len(x):
+            warnings.warn(
+                f"Savitzky-Golay window size ({savgol_window}) is larger than the number of data points ({len(x)}). "
+                f"Skipping Savitzky-Golay filtering."
+            )
+            y_smooth = y
+            y_err_smooth = y_err
+        elif savgol_polyorder >= savgol_window:
+            warnings.warn(
+                f"Savitzky-Golay polyorder ({savgol_polyorder}) must be less than window size ({savgol_window}). "
+                f"Skipping Savitzky-Golay filtering."
+            )
+            y_smooth = y
+            y_err_smooth = y_err
+        else:
+            try:
+                # Apply Savitzky-Golay filter
+                y_smooth = savgol_filter(y, window_length=savgol_window, polyorder=savgol_polyorder)
+                y_err_smooth = savgol_filter(y_err, window_length=savgol_window, polyorder=savgol_polyorder)
+            except Exception as e:
+                warnings.warn(
+                    f"Savitzky-Golay filtering failed with error: {e}. Skipping Savitzky-Golay filtering."
+                )
+                y_smooth = y
+                y_err_smooth = y_err
+    else:
+        # No smoothing; use original data
+        y_smooth = y
+        y_err_smooth = y_err
+
+    # Initialize the plot
+    plt.figure(figsize=(5, 3), dpi=300)
+    sns.set(style="whitegrid")
+
+    # Define color palette
+    color = sns.color_palette("viridis", 1)[0]
+
+    # Plot mean O-information line
+    plt.plot(
+        x,
+        y_smooth,
+        label='Mean O-Information',
+        color=color,
+        linewidth=1  # Thinner line
+    )
+
+    # Plot standard error shading
+    plt.fill_between(
+        x,
+        y_smooth - y_err_smooth,
+        y_smooth + y_err_smooth,
+        color=color,
+        alpha=0.2,  # Increased alpha for better visibility
+        label='Standard Error'
+    )
+
+    # Set labels and title
+    plt.xlabel('Time', fontsize=7)
+    plt.ylabel('O-Information (Bits)', fontsize=7)
+    plt.title('Average O-Information Over Time with Standard Error', fontsize=8)
+
+    # Customize ticks
+    plt.xticks(fontsize=6)
+    plt.yticks(fontsize=6)
+
+    # Add legend
+    plt.legend(fontsize=6)
+
+    # Adjust layout for a clean look
+    plt.tight_layout()
+
+    # Save the figure
+    if output_path is not None:
+        plt.savefig(f'{output_path}.pdf', format='pdf', bbox_inches='tight')
+        plt.savefig(f'{output_path}.png', format='png', dpi=300, bbox_inches='tight')
+
+    # Show plot
+    plt.show()
+
+def o_information_cont(data, action_suffix='_action'):
+    """
+    Main function to calculate and plot O-information heatmap or line graph based on the presence of 'Repeat' column.
+
+    Parameters:
+    - data: pandas DataFrame containing the data.
+    - action_suffix: Suffix used to identify action columns.
+    """
+    # Calculate O-information
+    o_information_df = calculate_o_information_continuous(data, action_suffix)
+
+    # Plot heatmap or line graph based on data structure
+    plot_o_information(o_information_df)
+
+
+# # ======================================================================================================================================================
+# # AVERAGE ACTION OVER REPEATS
+# # ======================================================================================================================================================
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from matplotlib import gridspec
+import warnings
+from scipy.signal import savgol_filter
+
+
+def calculate_average_action(data, action_suffix='_action'):
+    """
+    Calculate the average action for each agent over repeats, along with standard error (SE).
+
+    Parameters:
+    - data: pandas DataFrame containing the data.
+    - action_suffix: suffix used to identify action columns.
+
+    Returns:
+    - DataFrame with columns ['Agent', 'Timestep', 'Mean_Action', 'Std_Error']
+    """
+    action_columns = [col for col in data.columns if col.endswith(action_suffix)]
+    result_df_list = []
+
+    if 'Repeat' in data.columns:
+        # Multiple runs: Calculate average action for each repeat
+        grouped = data.groupby('Repeat')
+        for repeat, group in grouped:
+            for agent_col in action_columns:
+                # Extract agent number (assuming format like 'agent_1_action')
+                try:
+                    agent_number = agent_col.split('_')[1]
+                except IndexError:
+                    warnings.warn(
+                        f"Agent column '{agent_col}' does not follow the expected format 'agent_X_action'. Skipping."
+                    )
+                    continue
+
+                # Calculate average action
+                local_avg_df = pd.DataFrame({
+                    'Action_Value': group[agent_col].values,
+                    'Timestep': group['Timestep'].values[:len(group[agent_col].values)],
+                    'Agent': agent_number,
+                    'Repeat': repeat
+                })
+
+                result_df_list.append(local_avg_df)
+
+        if not result_df_list:
+            warnings.warn("No valid calculations were performed due to incorrect column naming.")
+            return pd.DataFrame()
+
+        # Combine all results into a single DataFrame
+        combined_df = pd.concat(result_df_list, ignore_index=True)
+
+        # Calculate mean and standard error across repeats
+        aggregated_df = combined_df.groupby(['Agent', 'Timestep']).agg(
+            Mean_Action=('Action_Value', 'mean'),
+            Std_Error=('Action_Value', 'sem')
+        ).reset_index()
+
+        return aggregated_df
+    else:
+        warnings.warn("Data does not contain 'Repeat' column, so average action cannot be computed across repeats.")
+        return pd.DataFrame()
+
+
+def plot_action_linegraphs_subplots(
+    aggregated_df, 
+    use_savgol=False,
+    savgol_window=21,
+    savgol_polyorder=2
+):
+    """
+    Plot separate line graphs for each agent showing average action value with standard error shading,
+    with optional Savitzky-Golay smoothing for smoother lines and shading.
+
+    Parameters:
+    - aggregated_df: pandas DataFrame containing ['Agent', 'Timestep', 'Mean_Action', 'Std_Error']
+    - use_savgol: Boolean; if True, apply Savitzky-Golay filter to smooth the data.
+    - savgol_window: Window length for Savitzky-Golay filter (must be a positive odd integer and <= number of data points).
+    - savgol_polyorder: Polynomial order for Savitzky-Golay filter (must be less than savgol_window).
+    """
+    agents = aggregated_df['Agent'].unique()
+    num_agents = len(agents)
+
+    if num_agents == 0:
+        warnings.warn("No agents found in the data to plot.")
+        return
+
+    # Define figure size: width proportional to number of agents, height fixed
+    width_per_agent = 6
+    height = 6
+    total_width = width_per_agent * num_agents
+    sns.set(style="whitegrid")
+
+    # Create a subplot for each agent
+    fig, axes = plt.subplots(
+        1, num_agents, 
+        figsize=(width_per_agent * num_agents, height), 
+        sharey=True
+    )
+
+    # If only one agent, axes is not a list
+    if num_agents == 1:
+        axes = [axes]
+
+    # Define a color palette
+    palette = sns.color_palette("viridis", n_colors=num_agents)
+    color_dict = dict(zip(agents, palette))
+
+    for ax, agent in zip(axes, agents):
+        agent_data = aggregated_df[aggregated_df['Agent'] == agent].sort_values('Timestep')
+
+        if agent_data.empty:
+            warnings.warn(f"No data available for Agent {agent}. Skipping plot.")
+            continue
+
+        # Original timesteps and data
+        x = agent_data['Timestep'].values
+        y = agent_data['Mean_Action'].values
+        y_err = agent_data['Std_Error'].values
+
+        if use_savgol:
+            # Validate Savitzky-Golay parameters
+            if savgol_window % 2 == 0 or savgol_window <= 0:
+                warnings.warn(
+                    f"Agent {agent}: Savitzky-Golay window size must be a positive odd integer. "
+                    f"Received window={savgol_window}. Skipping Savitzky-Golay filtering."
+                )
+                y_smooth = y
+                y_err_smooth = y_err
+            elif savgol_window > len(x):
+                warnings.warn(
+                    f"Agent {agent}: Savitzky-Golay window size ({savgol_window}) is larger than the number of data points ({len(x)}). "
+                    f"Skipping Savitzky-Golay filtering."
+                )
+                y_smooth = y
+                y_err_smooth = y_err
+            elif savgol_polyorder >= savgol_window:
+                warnings.warn(
+                    f"Agent {agent}: Savitzky-Golay polyorder ({savgol_polyorder}) must be less than window size ({savgol_window}). "
+                    f"Skipping Savitzky-Golay filtering."
+                )
+                y_smooth = y
+                y_err_smooth = y_err
+            else:
+                try:
+                    # Apply Savitzky-Golay filter
+                    y_smooth = savgol_filter(y, window_length=savgol_window, polyorder=savgol_polyorder)
+                    y_err_smooth = savgol_filter(y_err, window_length=savgol_window, polyorder=savgol_polyorder)
+                except Exception as e:
+                    warnings.warn(
+                        f"Agent {agent}: Savitzky-Golay filtering failed with error: {e}. "
+                        f"Skipping Savitzky-Golay filtering."
+                    )
+                    y_smooth = y
+                    y_err_smooth = y_err
+        else:
+            # No smoothing; use original data
+            y_smooth = y
+            y_err_smooth = y_err
+
+        # Plot the mean action with a thinner line
+        ax.plot(
+            x,
+            y_smooth,
+            label=f'Agent {agent}',
+            color=color_dict[agent],
+            linewidth=1  # Thinner lines
+        )
+
+        # Shade the standard error with adjusted transparency
+        ax.fill_between(
+            x,
+            y_smooth - y_err_smooth,
+            y_smooth + y_err_smooth,
+            color=color_dict[agent],
+            alpha=0.2  # Increased alpha for better visibility
+        )
+
+        ax.set_title(f'Agent {agent}', fontsize=18)
+        ax.set_xlabel('Time', fontsize=16)
+        if ax == axes[0]:
+            ax.set_ylabel('Action Value', fontsize=16)
+        else:
+            ax.set_ylabel('')
+        ax.tick_params(axis='both', which='major', labelsize=14)
+        ax.legend().set_visible(False)  # Hide individual legends
+
+    # Create a single legend for all subplots
+    handles = [plt.Line2D([0], [0], color=color_dict[agent], lw=2) for agent in agents]
+    labels = [f'Agent {agent}' for agent in agents]
+    fig.legend(handles, labels, loc='upper right', fontsize=16, title='Agents', title_fontsize=18)
+
+    plt.suptitle('Average Action Value with Standard Error', fontsize=20, y=0.95)
+    plt.tight_layout(rect=[0, 0, 1, 0.92])
+
+    # Show plot
+    plt.show()
+
+
+def plot_average_action(data, action_suffix='_action'):
+    """
+    Main function to calculate and plot average action value with standard error.
+
+    Parameters:
+    - data: pandas DataFrame containing the data.
+    - action_suffix: suffix used to identify action columns.
+    """
+
+    # Calculate average action
+    average_action_df = calculate_average_action(data, action_suffix)
+
+    if average_action_df.empty:
+        warnings.warn("Action calculation returned an empty DataFrame. No plots will be generated.")
+        return
+
+    # Plot the results as line graphs with standard error
+    plot_action_linegraphs_subplots(average_action_df)
+
+
+
+# ======================================================================================================================================================
+# MULTI-INFORMATION: DISCRETE
+# ======================================================================================================================================================
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from matplotlib import gridspec
+from jpype import JPackage, startJVM, getDefaultJVMPath, JArray, JInt
+import warnings
+from scipy.signal import savgol_filter
+
+def multi_information_discrete_multivariate(data, action_columns):
+    """
+    Calculate multi-information using the discrete estimator.
+    Parameters:
+    - data: pandas DataFrame containing the data.
+    - action_columns: List of column names representing discrete variables.
+    Returns:
+    - NumPy array with local multi-information (Bits) per observation.
+    """
+    from infodynamics.measures.discrete import MultiInformationCalculatorDiscrete
+
+    # Clean data by removing NaNs
+    data_clean = data.dropna(subset=action_columns)
+    combined_actions = data_clean[action_columns].values.astype(int)
+
+    # Initialize the discrete multi-information calculator
+    calc = MultiInformationCalculatorDiscrete()
+    num_dimensions = combined_actions.shape[1]
+    calc.initialise(2, num_dimensions)  # Adjust base if needed
+
+    # Convert data to Java-compatible JArray
+    combined_actions_jarray = JArray(JArray(JInt))(len(combined_actions))
+    for i, row in enumerate(combined_actions):
+        combined_actions_jarray[i] = JArray(JInt)(row)
+
+    # Add observations and compute local multi-information
+    calc.addObservations(combined_actions_jarray)
+    local_result_bits = np.array(calc.computeLocalOfPreviousObservations()) / np.log(2)
+
+    return local_result_bits
+
+def calculate_multi_information_discrete(data, action_suffix='_action'):
+    """
+    Calculate multi-information for discrete observations.
+    Parameters:
+    - data: pandas DataFrame containing the data.
+    - action_suffix: Suffix used to identify action columns.
+    Returns:
+    - DataFrame with multi-information values.
+    """
+    action_columns = [col for col in data.columns if col.endswith(action_suffix)]
+    result_list = []
+
+    if 'Repeat' in data.columns:
+        grouped = data.groupby('Repeat')
+        for repeat, group in grouped:
+            group_sorted = group.sort_values('Timestep')
+            mi_bits = multi_information_discrete_multivariate(group_sorted, action_columns)
+            result_list.append(pd.DataFrame({
+                'Multi_Information_Bits': mi_bits,
+                'Timestep': group_sorted['Timestep'].values,
+                'Repeat': repeat
+            }))
+
+        combined_df = pd.concat(result_list, ignore_index=True)
+        aggregated_df = combined_df.groupby('Timestep').agg(
+            Mean_Multi_Information=('Multi_Information_Bits', 'mean'),
+            Std_Error=('Multi_Information_Bits', 'sem')
+        ).reset_index()
+        return aggregated_df
+
+    else:
+        data_sorted = data.sort_values('Timestep')
+        mi_bits = multi_information_discrete_multivariate(data_sorted, action_columns)
+        return pd.DataFrame({
+            'Multi_Information_Bits': mi_bits,
+            'Timestep': data_sorted['Timestep'].values
+        })
+
+def plot_multi_information(multi_information_df, output_path=None):
+    """
+    Plot multi-information values.
+    Parameters:
+    - multi_information_df: DataFrame with multi-information data.
+    - output_path: Optional path to save the plot.
+    """
+    if {'Mean_Multi_Information', 'Std_Error'}.issubset(multi_information_df.columns):
+        plot_multi_information_linegraph(multi_information_df, output_path)
+    else:
+        plot_multi_information_heatmap_single(multi_information_df, output_path)
+
+def plot_multi_information_heatmap_single(multi_information_df, output_path=None):
+    """
+    Plot a heatmap for single-run multi-information.
+    """
+    pivot_table = multi_information_df.pivot_table(
+        index='Timestep', values='Multi_Information_Bits', aggfunc='mean'
+    ).T
+    cmap = sns.color_palette("viridis", as_cmap=True)
+
+    fig = plt.figure(figsize=(10, 2), dpi=300)
+    gs = gridspec.GridSpec(1, 2, width_ratios=[20, 1])
+
+    ax = plt.subplot(gs[0])
+    sns.heatmap(pivot_table, cmap=cmap, cbar=False, ax=ax, linewidths=0)
+    ax.set_xlabel('Time')
+    ax.set_ylabel('Multi-Information')
+    ax.set_title('Multi-Information Over Time')
+
+    cbar_ax = plt.subplot(gs[1])
+    norm = plt.Normalize(vmin=pivot_table.values.min(), vmax=pivot_table.values.max())
+    sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+    sm.set_array([])
+    plt.colorbar(sm, cax=cbar_ax)
+
+    plt.tight_layout()
+    if output_path:
+        plt.savefig(f'{output_path}.pdf')
+        plt.savefig(f'{output_path}.png', dpi=300)
+    plt.show()
+
+def plot_multi_information_linegraph(
+    aggregated_df, output_path=None, use_savgol=False, savgol_window=21, savgol_polyorder=3
+):
+    """
+    Plot a line graph with optional smoothing.
+    """
+    x = aggregated_df['Timestep'].values
+    y = aggregated_df['Mean_Multi_Information'].values
+    y_err = aggregated_df['Std_Error'].values
+
+    if use_savgol and len(x) >= savgol_window:
+        y = savgol_filter(y, savgol_window, savgol_polyorder)
+        y_err = savgol_filter(y_err, savgol_window, savgol_polyorder)
+
+    plt.figure(figsize=(5, 3), dpi=300)
+    plt.plot(x, y, label='Mean Multi-Information')
+    plt.fill_between(x, y - y_err, y + y_err, alpha=0.2)
+    plt.xlabel('Time')
+    plt.ylabel('Multi-Information (Bits)')
+    plt.title('Average Multi-Information Over Time')
+    plt.legend()
+    plt.tight_layout()
+
+    if output_path:
+        plt.savefig(f'{output_path}.pdf')
+        plt.savefig(f'{output_path}.png', dpi=300)
+    plt.show()
+
+def multi_information(data, action_suffix='_action'):
+    """
+    Main function to calculate and plot multi-information.
+    """
+    multi_info_df = calculate_multi_information_discrete(data, action_suffix)
+    plot_multi_information(multi_info_df)
+    

@@ -100,34 +100,38 @@ hawk_dove_2player = torch.tensor([
 hawk_dove_2player += EPSILON
 
 
+######
 
 # Attachment game (Buono et al)
 
-# Define the parameters for the attachment game
-v = 1.  # Value (comfort) if the child goes to the mother and the mother attends
-s = 1.  # Stress if the child goes to the mother and is ignored
-c = 0.5  # Cost for the mother attending to the child
 
-# Compute the payoffs
-# Format is: (Child's payoff, Mother's payoff)
+# Define parameters based on the model
+q = -2  # Comfort (payoff) when the mother attends
+s = 2.0  # Stress when the mother ignores
+c = 0.5  # Cost to the mother for attending
 
-go_attend = (v, v - c)          # Child goes to the mother, mother attends
-go_ignore = (-s, -s)            # Child goes to the mother, mother ignores
-dont_go_attend = (0, -c)        # Child doesn't go to the mother, mother attends
-dont_go_ignore = (0, 0)         # Child doesn't go to the mother, mother ignores
+# Payoff matrix for the child
+child_go_attend = q                 # Child goes to mother, mother attends
+child_go_ignore = -s                # Child goes to mother, mother ignores
+child_dont_go_attend = 0            # Child doesn't go to mother, mother attends
+child_dont_go_ignore = 0            # Child doesn't go to mother, mother ignores
 
-# Create the payoff matrix for the 2x2 attachment game
-# Child's actions: [Go, Don't Go]
-# Mother's actions: [Attend, Ignore]
-
+# Create the payoff matrix for the child
 attachment_game_2player_child = torch.tensor([
-    [go_attend[0], go_ignore[0]],       # Child's payoffs when [Attend, Ignore]
-    [dont_go_attend[0], dont_go_ignore[0]]  # Child's payoffs when [Attend, Ignore]
+    [child_go_attend, child_go_ignore],       # Child's payoffs when [Mother Attends, Mother Ignores]
+    [child_dont_go_attend, child_dont_go_ignore]  # Child's payoffs when [Mother Attends, Mother Ignores]
 ])
 
+# Payoff matrix for the mother
+mother_go_attend = q - c            # Mother attends and the child goes
+mother_go_ignore = 0               # Mother ignores and the child goes
+mother_dont_go_attend = -c          # Mother attends and the child doesn't go
+mother_dont_go_ignore = 0           # Mother ignores and the child doesn't go
+
+# Create the payoff matrix for the mother
 attachment_game_2player_mother = torch.tensor([
-    [go_attend[1], go_ignore[1]],       # Mother's payoffs when [Go, Don't Go]
-    [dont_go_attend[1], dont_go_ignore[1]]  # Mother's payoffs when [Go, Don't Go]
+    [mother_go_attend, mother_go_ignore],       # Mother's payoffs when [Child Goes, Child Doesn't Go]
+    [mother_dont_go_attend, mother_dont_go_ignore]  # Mother's payoffs when [Child Goes, Child Doesn't Go]
 ])
 
 # Optional: Add small epsilon to avoid zero values
