@@ -39,7 +39,7 @@ stag_hunt_2player = torch.tensor(
 
 # Chicken game (row player payoffs)
 chicken_2player = torch.tensor(
-    [[2.0, 3.0],      # Dare, Chicken
+    [[3.0, 2.0],      # Dare, Chicken
      [4.0, 1.0]]      # Chicken, Dare
 )
 

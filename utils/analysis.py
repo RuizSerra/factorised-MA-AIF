@@ -27,7 +27,7 @@ plt.rcParams['axes.titlesize'] = 20  # Title
 plt.rcParams['xtick.labelsize'] = 14 # X tick labels
 plt.rcParams['ytick.labelsize'] = 14 # Y tick labels
 
-def initialize_jvm(jidt_dir=None, max_memory="4024M"):
+def initialize_jvm(jidt_dir=None, max_memory="12024M"):
     # Check if the JIDT directory is provided
     if jidt_dir is None:
         raise ValueError("Please provide a path to the JIDT installation directory, e.g. '/Users/alice/Downloads/infodynamics-dist-1.6.1/'")
@@ -2288,7 +2288,7 @@ def calculate_local_pi_for_agent(actions, calc):
     
     return local_pi
 
-def calculate_local_predictive_information(data, action_suffix, past_window=1, future_window=1):
+def calculate_local_predictive_information(data, action_suffix, past_window=4, future_window=1):
     """
     Calculate local Predictive Information (PI) for all agents.
     """
@@ -2321,7 +2321,7 @@ def calculate_local_predictive_information(data, action_suffix, past_window=1, f
 
     return local_pi_df
 
-def calculate_pi_with_repeats(data, action_suffix, past_window=1, future_window=1):
+def calculate_pi_with_repeats(data, action_suffix, past_window=4, future_window=1):
     """
     Calculate Predictive Information (PI) for agent actions, averaging over repeats if present.
     """
@@ -2574,7 +2574,7 @@ def plot_pi_linegraphs(
     # Show plot
     plt.show()
 
-def predictive_information(data, action_suffix='_action', past_window=1, future_window=1):
+def predictive_information(data, action_suffix='_action', past_window=4, future_window=1):
     """
     Main function to calculate local Predictive Information, plot the heatmap, or line graphs if repeats are present.
     """
@@ -2592,6 +2592,479 @@ def predictive_information(data, action_suffix='_action', past_window=1, future_
     return aggregated_df
 
 
+
+# ======================================================================================================================================================
+# PREDICTIVE INFORMATION (Composite Actions)
+# ======================================================================================================================================================
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from matplotlib import gridspec
+from jpype import JPackage
+from matplotlib.ticker import MaxNLocator
+from scipy.signal import savgol_filter
+import warnings
+
+def initialize_pi_calculator_composite(base, past_window):
+    """
+    Initialize the Predictive Information calculator from JIDT for composite actions.
+    """
+    calcClass = JPackage("infodynamics.measures.discrete").PredictiveInformationCalculatorDiscrete
+    return calcClass(base, past_window)
+
+def calculate_local_pi_for_composite_actions(composite_actions_codes, calc):
+    """
+    Calculate local Predictive Information (PI) for composite actions.
+    """
+    # Add observations
+    calc.addObservations(composite_actions_codes)
+    
+    # Calculate the local predictive information
+    local_pi = calc.computeLocal(composite_actions_codes)
+    
+    return local_pi
+
+def calculate_local_predictive_information_composite(data, action_suffix, past_window=4, future_window=1):
+    """
+    Calculate local Predictive Information (PI) for the composite actions of all agents.
+    """
+    # Find all agent action columns
+    action_columns = [col for col in data.columns if col.endswith(action_suffix)]
+
+    # Extract actions of all agents
+    actions_data = data[action_columns]
+
+    # Create a composite action variable
+    composite_actions = actions_data.apply(tuple, axis=1)
+
+    # Factorize to get integer codes
+    composite_actions_codes, uniques = pd.factorize(composite_actions)
+
+    # Calculate the base for the composite actions
+    base = len(uniques)
+
+    # Initialize the PI calculator
+    calc = initialize_pi_calculator_composite(base, past_window)
+    calc.initialise()
+
+    # Calculate local PI for the composite action variable
+    local_pi = calculate_local_pi_for_composite_actions(composite_actions_codes.astype(int), calc)
+
+    # Prepare the result DataFrame
+    local_pi_df = pd.DataFrame({'Local PI': local_pi, 'Timestep': data['Timestep'].values})
+
+    return local_pi_df
+
+def calculate_pi_with_repeats_composite(data, action_suffix, past_window=4, future_window=1):
+    """
+    Calculate Predictive Information (PI) for composite actions, averaging over repeats if present.
+    """
+    result_df_list = []
+
+    if 'Repeat' in data.columns:
+        # Multiple runs: Calculate PI for each repeat
+        grouped = data.groupby('Repeat')
+        for repeat, group in grouped:
+            # Calculate PI for this repeat
+            local_pi_df = calculate_local_predictive_information_composite(group, action_suffix, past_window, future_window)
+            local_pi_df['Repeat'] = repeat
+            result_df_list.append(local_pi_df)
+
+            # Print the number of timesteps in each repeat
+            num_timesteps = len(group)
+
+        # Combine all results into a single DataFrame
+        combined_df = pd.concat(result_df_list, ignore_index=True)
+
+        # Ensure 'Local PI' column is numeric
+        combined_df['Local PI'] = pd.to_numeric(combined_df['Local PI'], errors='coerce')
+
+        # Drop any rows where 'Local PI' is NaN
+        combined_df = combined_df.dropna(subset=['Local PI'])
+
+        # Group by 'Timestep' to average over repeats
+        aggregated_df = combined_df.groupby(['Timestep']).agg(
+            mean_pi=('Local PI', 'mean'),
+            sem_pi=('Local PI', 'sem')
+        ).reset_index()
+
+        return aggregated_df
+    else:
+        # Single run: Calculate PI normally
+        return calculate_local_predictive_information_composite(data, action_suffix, past_window, future_window)
+
+def plot_pi_linegraph_composite(
+    aggregated_df, 
+    output_path=None, 
+    use_savgol=False,
+    savgol_window=21,
+    savgol_polyorder=3
+):
+    """
+    Plot Predictive Information (PI) line graph for composite actions with standard error shading,
+    incorporating optional Savitzky-Golay smoothing.
+
+    Parameters:
+    - aggregated_df: pandas DataFrame containing ['Timestep', 'mean_pi', 'sem_pi']
+    - output_path: Optional; path to save the plot (without extension).
+    - use_savgol: Boolean; if True, apply Savitzky-Golay filter to smooth the data.
+    - savgol_window: Window length for Savitzky-Golay filter (must be a positive odd integer and <= number of data points).
+    - savgol_polyorder: Polynomial order for Savitzky-Golay filter (must be less than savgol_window).
+    """
+    # Validate input DataFrame
+    required_columns = {'Timestep', 'mean_pi', 'sem_pi'}
+    if not required_columns.issubset(aggregated_df.columns):
+        raise ValueError(f"Input DataFrame must contain columns: {required_columns}")
+
+    # Extract data
+    x = aggregated_df['Timestep'].values
+    y = aggregated_df['mean_pi'].values
+    y_err = aggregated_df['sem_pi'].values
+
+    if use_savgol:
+        # Validate Savitzky-Golay parameters
+        if not isinstance(savgol_window, int) or savgol_window <= 0 or savgol_window % 2 == 0:
+            warnings.warn(
+                f"Savitzky-Golay window size must be a positive odd integer. "
+                f"Received window={savgol_window}. Skipping Savitzky-Golay filtering."
+            )
+            y_smooth = y
+            y_err_smooth = y_err
+        elif savgol_window > len(x):
+            warnings.warn(
+                f"Savitzky-Golay window size ({savgol_window}) is larger than the number of data points ({len(x)}). "
+                f"Skipping Savitzky-Golay filtering."
+            )
+            y_smooth = y
+            y_err_smooth = y_err
+        elif savgol_polyorder >= savgol_window:
+            warnings.warn(
+                f"Savitzky-Golay polyorder ({savgol_polyorder}) must be less than window size ({savgol_window}). "
+                f"Skipping Savitzky-Golay filtering."
+            )
+            y_smooth = y
+            y_err_smooth = y_err
+        else:
+            try:
+                # Apply Savitzky-Golay filter
+                y_smooth = savgol_filter(y, window_length=savgol_window, polyorder=savgol_polyorder)
+                y_err_smooth = savgol_filter(y_err, window_length=savgol_window, polyorder=savgol_polyorder)
+            except Exception as e:
+                warnings.warn(
+                    f"Savitzky-Golay filtering failed with error: {e}. "
+                    f"Skipping Savitzky-Golay filtering."
+                )
+                y_smooth = y
+                y_err_smooth = y_err
+    else:
+        # No smoothing; use original data
+        y_smooth = y
+        y_err_smooth = y_err
+
+    # Plot the mean PI with a thinner line
+    plt.figure(figsize=(10, 6))
+    plt.plot(
+        x,
+        y_smooth,
+        label='Composite Actions',
+        color='blue',
+        linewidth=1  # Thinner lines
+    )
+
+    # Plot the standard error shading
+    if 'sem_pi' in aggregated_df.columns:
+        if aggregated_df['sem_pi'].sum() > 0:  # Ensure there's variation before shading
+            plt.fill_between(
+                x,
+                y_smooth - y_err_smooth,
+                y_smooth + y_err_smooth,
+                color='blue',
+                alpha=0.2,  # Increased alpha for better visibility
+                label='Standard Error'
+            )
+
+    # Set axis labels and title
+    plt.title('Predictive Information of Composite Actions', fontsize=18)
+    plt.xlabel('Time', fontsize=16)
+    plt.ylabel('Predictive Information (Bits)', fontsize=16)
+    plt.legend(fontsize=14)
+    plt.tight_layout()
+
+    # Save the figure
+    if output_path is not None:
+        plt.savefig(f'{output_path}.pdf', format='pdf', bbox_inches='tight')
+        plt.savefig(f'{output_path}.png', format='png', dpi=300, bbox_inches='tight')
+
+    # Show plot
+    plt.show()
+
+def predictive_information_composite(data, action_suffix='_action', past_window=4, future_window=1):
+    """
+    Main function to calculate local Predictive Information for composite actions,
+    and plot the line graph with standard error shading if repeats are present.
+    """
+    # Calculate Predictive Information, either with or without repeats
+    aggregated_df = calculate_pi_with_repeats_composite(data, action_suffix, past_window, future_window)
+
+    # Check if mean and sem_pi exist for plotting
+    if 'mean_pi' in aggregated_df.columns:
+        # If repeats are present, plot line graph with standard error shading
+        plot_pi_linegraph_composite(aggregated_df)
+    else:
+        # Otherwise, plot the local PI over time
+        plt.figure(figsize=(10, 6))
+        plt.plot(aggregated_df['Timestep'], aggregated_df['Local PI'], label='Composite Actions', color='blue')
+        plt.title('Predictive Information of Composite Actions', fontsize=18)
+        plt.xlabel('Time', fontsize=16)
+        plt.ylabel('Predictive Information (Bits)', fontsize=16)
+        plt.legend(fontsize=14)
+        plt.tight_layout()
+        plt.show()
+
+    return aggregated_df
+
+
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+
+def calculate_average_predictive_information(data, action_suffix, max_past_window=4, future_window=1):
+    """
+    Calculate average Predictive Information (PI) over a range of past windows.
+    """
+    avg_pi_results = []
+
+    # Loop over different past window sizes
+    for past_window in range(1, max_past_window + 1):
+        # Calculate Predictive Information for this past window
+        aggregated_df = calculate_pi_with_repeats(data, action_suffix, past_window, future_window)
+
+        # Calculate the mean Predictive Information across all agents and timesteps
+        avg_pi = aggregated_df['mean_pi'].mean()
+        
+        # Store the result (past window size and corresponding average PI)
+        avg_pi_results.append((past_window, avg_pi))
+
+    # Convert the results to a DataFrame
+    avg_pi_df = pd.DataFrame(avg_pi_results, columns=['Past Window (k)', 'Average Predictive Information'])
+    
+    return avg_pi_df
+
+def plot_avg_pi_vs_past_window(avg_pi_df):
+    """
+    Plot Average Predictive Information against Past Window (k).
+    """
+    plt.figure(figsize=(10, 6))
+    plt.plot(avg_pi_df['Past Window (k)'], avg_pi_df['Average Predictive Information'], marker='o', linestyle='-')
+    plt.xlabel('Past Window (k)', fontsize=14)
+    plt.ylabel('Average Predictive Information (Bits)', fontsize=14)
+    plt.title('Average Predictive Information vs Past Window (k)', fontsize=16)
+    plt.grid(True)
+    plt.show()
+
+
+
+# ======================================================================================================================================================
+# ACTIVE INFORMATION STORAGE (AIS)
+# ======================================================================================================================================================
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from matplotlib import gridspec
+from jpype import JPackage
+from matplotlib.ticker import MaxNLocator
+from scipy.signal import savgol_filter
+import warnings
+
+# Initialization and Calculation Functions
+def initialize_ais_calculator(base, past_window):
+    """
+    Initialize the Active Information Storage (AIS) calculator from JIDT.
+    """
+    calcClass = JPackage("infodynamics.measures.discrete").ActiveInformationCalculatorDiscrete
+    return calcClass(base, past_window)
+
+def calculate_local_ais_for_agent(actions, calc):
+    """
+    Calculate local Active Information Storage (AIS) for a specific agent.
+    """
+    # Add observations
+    calc.addObservations(actions)
+    # Calculate the local AIS
+    local_ais = calc.computeLocal(actions)
+    return local_ais
+
+def calculate_local_active_information_storage(data, action_suffix, past_window=4, future_window=1):
+    """
+    Calculate local Active Information Storage (AIS) for all agents.
+    """
+    action_columns = [col for col in data.columns if col.endswith(action_suffix)]
+    local_ais_dict = {}
+    for agent_col in action_columns:
+        agent_number = agent_col.split('_')[1]
+        base = len(np.unique(data[agent_col].dropna().values))
+        calc = initialize_ais_calculator(base, past_window)
+        calc.initialise()
+        local_ais = calculate_local_ais_for_agent(data[agent_col].values.astype(int), calc)
+        local_ais_dict[f'Agent {agent_number}'] = local_ais
+    local_ais_df = pd.DataFrame(local_ais_dict)
+    local_ais_df['Timestep'] = data['Timestep'].values
+    return local_ais_df
+
+def calculate_ais_with_repeats(data, action_suffix, past_window=4, future_window=1):
+    """
+    Calculate Active Information Storage (AIS) for agent actions, averaging over repeats if present.
+    """
+    result_df_list = []
+    if 'Repeat' in data.columns:
+        grouped = data.groupby('Repeat')
+        for repeat, group in grouped:
+            local_ais_df = calculate_local_active_information_storage(group, action_suffix, past_window, future_window)
+            local_ais_df['Repeat'] = repeat
+            result_df_list.append(local_ais_df)
+        combined_df = pd.concat(result_df_list, ignore_index=True)
+        melted_df = combined_df.melt(id_vars=['Timestep', 'Repeat'], var_name='Agent', value_name='Local AIS')
+        melted_df['Local AIS'] = pd.to_numeric(melted_df['Local AIS'], errors='coerce')
+        melted_df = melted_df.dropna(subset=['Local AIS'])
+        aggregated_df = melted_df.groupby(['Agent', 'Timestep']).agg(
+            mean_ais=('Local AIS', 'mean'),
+            sem_ais=('Local AIS', 'sem')
+        ).reset_index()
+        return aggregated_df
+    else:
+        return calculate_local_active_information_storage(data, action_suffix, past_window, future_window)
+
+# Plotting Functions
+def plot_ais_heatmap(local_ais_df):
+    local_ais_melted = local_ais_df.melt(id_vars='Timestep', var_name='Agent', value_name='Local AIS')
+    heatmap_data = local_ais_melted.pivot_table(index='Agent', columns='Timestep', values='Local AIS')
+    cmap = sns.color_palette("viridis", as_cmap=True)
+    fig = plt.figure(figsize=(12, 8), dpi=300)
+    gs = gridspec.GridSpec(1, 2, width_ratios=[20, 1])
+    ax = plt.subplot(gs[0])
+    sns.heatmap(heatmap_data, cmap=cmap, cbar=False, ax=ax, linewidths=0)
+    ax.set_xlabel('Timestep', fontsize=20, labelpad=10)
+    ax.set_ylabel('Agent', fontsize=20, labelpad=10)
+    ax.set_title('Active Information Storage', fontsize=24, pad=15)
+    ax.set_yticks(np.arange(len(heatmap_data.index)) + 0.5)
+    ax.set_yticklabels([label for label in heatmap_data.index], fontsize=16)
+    ax.xaxis.set_major_locator(MaxNLocator(integer=True, prune='both', nbins=6))
+    ax.set_xticklabels([int(tick) for tick in ax.get_xticks()], fontsize=16)
+    cbar_ax = plt.subplot(gs[1])
+    norm = plt.Normalize(vmin=heatmap_data.values.min(), vmax=heatmap_data.values.max())
+    sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+    sm.set_array([])
+    cbar = plt.colorbar(sm, cax=cbar_ax)
+    cbar.ax.tick_params(labelsize=16)
+    cbar.set_label('Local AIS (Bits)', size=20)
+    plt.tight_layout(rect=[0, 0, 1, 0.95])
+    plt.show()
+
+def plot_ais_linegraphs(aggregated_df, output_path=None, use_savgol=False, savgol_window=21, savgol_polyorder=3):
+    required_columns = {'Agent', 'Timestep', 'mean_ais', 'sem_ais'}
+    if not required_columns.issubset(aggregated_df.columns):
+        raise ValueError(f"Input DataFrame must contain columns: {required_columns}")
+
+    agents = aggregated_df['Agent'].unique()
+    num_agents = len(agents)
+    max_per_row = 3
+    num_rows = (num_agents // max_per_row) + (1 if num_agents % max_per_row != 0 else 0)
+    width_per_agent = 6
+    height_per_row = 6
+    total_width = min(num_agents, max_per_row) * width_per_agent
+    total_height = num_rows * height_per_row
+    sns.set(style="whitegrid")
+    fig, axes = plt.subplots(num_rows, min(max_per_row, num_agents), figsize=(total_width, total_height), sharey=True)
+    if num_rows == 1:
+        axes = axes.flatten() if num_agents > 1 else [axes]
+    else:
+        axes = axes.flatten()
+
+    palette = sns.color_palette("viridis", n_colors=num_agents)
+    color_dict = dict(zip(agents, palette))
+
+    for ax, agent in zip(axes, agents):
+        agent_data = aggregated_df[aggregated_df['Agent'] == agent].sort_values('Timestep')
+        x = agent_data['Timestep'].values
+        y = agent_data['mean_ais'].values
+        y_err = agent_data['sem_ais'].values
+
+        if use_savgol:
+            if not isinstance(savgol_window, int) or savgol_window <= 0 or savgol_window % 2 == 0:
+                warnings.warn(f"Invalid Savitzky-Golay window for Agent {agent}; skipping smoothing.")
+                y_smooth = y
+                y_err_smooth = y_err
+            elif savgol_window > len(x):
+                warnings.warn(f"Window too large for Agent {agent}; skipping smoothing.")
+                y_smooth = y
+                y_err_smooth = y_err
+            elif savgol_polyorder >= savgol_window:
+                warnings.warn(f"Polyorder too high for Agent {agent}; skipping smoothing.")
+                y_smooth = y
+                y_err_smooth = y_err
+            else:
+                y_smooth = savgol_filter(y, window_length=savgol_window, polyorder=savgol_polyorder)
+                y_err_smooth = savgol_filter(y_err, window_length=savgol_window, polyorder=savgol_polyorder)
+        else:
+            y_smooth = y
+            y_err_smooth = y_err
+
+        ax.plot(x, y_smooth, label=f'Agent {agent}', color=color_dict[agent], linewidth=1)
+        if 'sem_ais' in agent_data.columns:
+            if agent_data['sem_ais'].sum() > 0:
+                ax.fill_between(x, y_smooth - y_err_smooth, y_smooth + y_err_smooth,
+                                color=color_dict[agent], alpha=0.2, label='Standard Error')
+
+        ax.set_title(f'Agent {agent}', fontsize=18)
+        ax.set_xlabel('Time', fontsize=16)
+        if ax == axes[0]:
+            ax.set_ylabel('Active Information Storage (Bits)', fontsize=16)
+        else:
+            ax.set_ylabel('')
+        ax.tick_params(axis='both', which='major', labelsize=14)
+        ax.legend().set_visible(False)
+
+    for ax in axes[len(agents):]:
+        fig.delaxes(ax)
+
+    handles = [plt.Line2D([0], [0], color=color_dict[agent], lw=2) for agent in agents]
+    labels = [f'Agent {agent}' for agent in agents]
+    fig.legend(handles, labels, loc='upper right', fontsize=16, title='Agents', title_fontsize=18)
+    plt.suptitle('Active Information Storage with Standard Error', fontsize=20, y=0.95)
+    plt.tight_layout(rect=[0, 0, 1, 0.92])
+
+    # Save the figure if an output path is provided
+    if output_path is not None:
+        plt.savefig(f'{output_path}.pdf', format='pdf', bbox_inches='tight')
+        plt.savefig(f'{output_path}.png', format='png', dpi=300, bbox_inches='tight')
+
+    # Show the plot
+    plt.show()
+
+def active_information_storage(data, action_suffix='_action', past_window=4, future_window=1):
+    """
+    Main function to calculate local Active Information Storage, plot the heatmap, or line graphs if repeats are present.
+    """
+    # Calculate Active Information Storage, either with or without repeats
+    aggregated_df = calculate_ais_with_repeats(data, action_suffix, past_window, future_window)
+
+    # Check if mean and sem_ais exist for plotting
+    if 'mean_ais' in aggregated_df.columns:
+        # If repeats are present, plot line graphs with standard error shading
+        plot_ais_linegraphs(aggregated_df)
+    else:
+        # Otherwise, use the original heatmap plot
+        plot_ais_heatmap(aggregated_df)
+
+    return aggregated_df
+
+# Example usage (assuming 'data' is a DataFrame containing your data)
+# result_df = active_information_storage(data, action_suffix='_action', past_window=4)
 
 # ======================================================================================================================================================
 # AUTOCORRELATION
@@ -4430,9 +4903,9 @@ def calculate_local_pi_for_agent_cont(data, agent_col, calc):
     actions = data[agent_col].values.astype(float).tolist()
 
     # calc.setProperty("k_HISTORY", "5")
-    # calc.setProperty("AUTO_EMBED_METHOD", "MAX_CORR_AIS")
-    # calc.setProperty("AUTO_EMBED_K_SEARCH_MAX", "10")
-    # calc.setProperty("AUTO_EMBED_TAU_SEARCH_MAX", "10")
+    calc.setProperty("AUTO_EMBED_METHOD", "MAX_CORR_AIS")
+    calc.setProperty("AUTO_EMBED_K_SEARCH_MAX", "10")
+    calc.setProperty("AUTO_EMBED_TAU_SEARCH_MAX", "10")
     
     # Start adding observations
     calc.startAddObservations()
@@ -4448,7 +4921,7 @@ def calculate_local_pi_for_agent_cont(data, agent_col, calc):
     
     return local_pi
 
-def calculate_local_predictive_information_cont(data, action_suffix, past_window=1, future_window=1):
+def calculate_local_predictive_information_cont(data, action_suffix, past_window=4, future_window=1):
     """
     Calculate local Predictive Information (PI) for all agents (continuous case).
     """
@@ -4478,7 +4951,7 @@ def calculate_local_predictive_information_cont(data, action_suffix, past_window
 
     return local_pi_df
 
-def calculate_pi_with_repeats_cont(data, action_suffix, past_window=1, future_window=1):
+def calculate_pi_with_repeats_cont(data, action_suffix, past_window=4, future_window=1):
     """
     Calculate Predictive Information (PI) for agent actions, averaging over repeats if present (continuous case).
     """
@@ -4573,7 +5046,7 @@ def plot_pi_linegraphs(
     aggregated_df, 
     output_path=None, 
     use_savgol=False,
-    savgol_window=21,
+    savgol_window=51,
     savgol_polyorder=3
 ):
     """
@@ -4724,7 +5197,7 @@ def plot_pi_linegraphs(
     # Show plot
     plt.show()
 
-def predictive_information_cont(data, action_suffix='_action', past_window=1, future_window=1):
+def predictive_information_cont(data, action_suffix='_action', past_window=4, future_window=1):
     """
     Main function to calculate local Predictive Information, plot the heatmap, or line graphs if repeats are present (continuous case).
     """
@@ -6361,14 +6834,14 @@ def multi_information_discrete_multivariate(data, action_columns):
     Returns:
     - NumPy array with local multi-information (Bits) per observation.
     """
-    from infodynamics.measures.discrete import MultiInformationCalculatorDiscrete
+    #from infodynamics.measures.discrete import MultiInformationCalculatorDiscrete
 
     # Clean data by removing NaNs
     data_clean = data.dropna(subset=action_columns)
     combined_actions = data_clean[action_columns].values.astype(int)
 
     # Initialize the discrete multi-information calculator
-    calc = MultiInformationCalculatorDiscrete()
+    calc = JPackage("infodynamics.measures.discrete").MultiInformationCalculatorDiscrete()
     num_dimensions = combined_actions.shape[1]
     calc.initialise(2, num_dimensions)  # Adjust base if needed
 
