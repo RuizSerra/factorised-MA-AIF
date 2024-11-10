@@ -451,6 +451,7 @@ def extract_history_all(variables_history):
     else:
         raise ValueError("variables_history should be either a dictionary or a list of tuples containing dictionaries.")
 
+
 # ======================================================================================================================================================
 # ENTROPY
 # ======================================================================================================================================================
@@ -800,6 +801,7 @@ def entropy(data, action_suffix='_action'):
     Main function to calculate and plot entropy heatmap or line graphs based on the presence of 'Repeat' column.
 
     Parameters:
+    
     - data: pandas DataFrame containing the data.
     - action_suffix: suffix used to identify action columns.
     """
@@ -1191,24 +1193,24 @@ def joint_entropy(data, action_suffix='_action'):
     # Plot heatmap or line graph based on data structure
     plot_joint_entropy(joint_entropy_df)
 
+
+
 # ======================================================================================================================================================
-# ENTROPY RATE
+# BLOCK ENTROPY
 # ======================================================================================================================================================
 
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
+from matplotlib import gridspec
 from jpype import startJVM, getDefaultJVMPath, isJVMStarted, JPackage
 from matplotlib.ticker import MaxNLocator
 import os
-import warnings
-from scipy.signal import savgol_filter
-
 
 def calculate_base(actions):
     """
-    Calculates the base for entropy rate as the number of unique distinct actions.
+    Calculates the base for block entropy as the number of unique distinct actions.
 
     Parameters:
     - actions: pandas Series containing action data.
@@ -1220,74 +1222,58 @@ def calculate_base(actions):
     base = len(unique_actions)
     return base
 
-
-def entropy_rate_discrete(data, variable, base, history=1):
+def block_entropy_discrete(data, variable, base, block_size):
     """
-    Calculate discrete entropy rate for a single variable.
+    Calculate block entropy for a single variable.
 
     Parameters:
     - data: pandas DataFrame containing the data.
-    - variable: column name for which to calculate entropy rate.
+    - variable: column name for which to calculate entropy.
     - base: base for the discrete variables.
-    - history: length of the past context to condition on.
+    - block_size: size of the block over which entropy is calculated.
 
     Returns:
-    - DataFrame with Entropy Rate (Bits) per timestep.
+    - DataFrame with Block Entropy (Bits) per timestep.
     """
     data_clean = data.replace([np.inf, -np.inf], np.nan).dropna(subset=[variable])
     train = data_clean[variable].values.astype(int)
 
-    # from jpype import JPackage
-    # from jpype.types import JArray, JInt
-    # train = JArray(JInt)(train_np)
+    # Set up the block entropy calculator
+    calcClass = JPackage("infodynamics.measures.discrete").BlockEntropyCalculatorDiscrete
+    calc = calcClass(block_size, base)
 
-    print(f"Train Data: {train}")
-    print(f"Type: {type(train)}")
-    print(f"Shape: {train.shape}")
-    print(f"Dtype: {train.dtype}")
-
-    # Set up the entropy rate calculator
-    calcClass = JPackage("infodynamics.measures.discrete").EntropyRateCalculatorDiscrete
-    calc = calcClass(base, history)
-
-    print(f'Base: {base}')
-    print(F'History: {history}')
-
-    # The initialise method requires an integer parameter, which is the history length
-    #calc.initialise(history)
-    calc.initialise(history)
+    calc.initialise()
     calc.addObservations(train)
 
-    # Calculate entropy rate
-    local_result_nats = calc.computeLocalFromPreviousObservations(train)
+    # Calculate entropy results
+    local_result_nats = calc.computeLocal(train)
 
     # Convert nats to bits
     local_result_bits = np.array(local_result_nats) / np.log(2)
 
     # Return DataFrame
-    return pd.DataFrame({'Entropy_Rate_Bits': local_result_bits})
+    return pd.DataFrame({'Block_Entropy_Bits': local_result_bits})
 
-
-def calculate_entropy_rate_discrete(data, action_suffix='_action', history=1):
+def calculate_block_entropy_discrete(data, action_suffix='_action', block_size=3):
     """
-    Calculate entropy rate for each agent's actions. Handles both single runs and multiple repeats.
+    Calculate block entropy for each agent's actions. Handles both single runs and multiple repeats.
 
     Parameters:
     - data: pandas DataFrame containing the data.
     - action_suffix: suffix used to identify action columns.
-    - history: length of the past context to condition on.
+    - block_size: size of the block over which entropy is calculated.
 
     Returns:
     - If 'Repeat' is not in data:
-        - DataFrame with columns ['Entropy_Rate_Bits', 'Agent', 'Timestep']
+        - DataFrame with columns ['Block_Entropy_Bits', 'Agent', 'Timestep']
       If 'Repeat' is in data:
-        - DataFrame with columns ['Agent', 'Timestep', 'Mean_Entropy_Rate', 'Std_Error']
+        - DataFrame with columns ['Agent', 'Timestep', 'Mean_Block_Entropy', 'Std_Error']
     """
     action_columns = [col for col in data.columns if col.endswith(action_suffix)]
     result_df_list = []
 
     if 'Repeat' in data.columns:
-        # Multiple runs: Calculate entropy rate for each repeat
+        # Multiple runs: Calculate block entropy for each repeat
         grouped = data.groupby('Repeat')
         for repeat, group in grouped:
             for agent_col in action_columns:
@@ -1297,27 +1283,27 @@ def calculate_entropy_rate_discrete(data, action_suffix='_action', history=1):
                 # Calculate the base for this agent's actions
                 base = calculate_base(group[agent_col])
 
-                # Calculate local entropy rate
-                local_entropy_rate_df = entropy_rate_discrete(group, agent_col, base, history)
+                # Calculate local block entropy
+                local_block_entropy_df = block_entropy_discrete(group, agent_col, base, block_size)
 
                 # Append agent number and timestep values
-                local_entropy_rate_df['Agent'] = agent_number
-                local_entropy_rate_df['Timestep'] = group['Timestep'].values[:len(local_entropy_rate_df)]
-                local_entropy_rate_df['Repeat'] = repeat
-                result_df_list.append(local_entropy_rate_df)
+                local_block_entropy_df['Agent'] = agent_number
+                local_block_entropy_df['Timestep'] = group['Timestep'].values[:len(local_block_entropy_df)]
+                local_block_entropy_df['Repeat'] = repeat
+                result_df_list.append(local_block_entropy_df)
 
         # Combine all results into a single DataFrame
         combined_df = pd.concat(result_df_list, ignore_index=True)
 
         # Calculate mean and standard error across repeats
         aggregated_df = combined_df.groupby(['Agent', 'Timestep']).agg(
-            Mean_Entropy_Rate=('Entropy_Rate_Bits', 'mean'),
-            Std_Error=('Entropy_Rate_Bits', 'sem')
+            Mean_Block_Entropy=('Block_Entropy_Bits', 'mean'),
+            Std_Error=('Block_Entropy_Bits', 'sem')
         ).reset_index()
 
         return aggregated_df
     else:
-        # Single run: Calculate entropy rate normally
+        # Single run: Calculate block entropy normally
         for agent_col in action_columns:
             # Extract agent number
             agent_number = agent_col.split('_')[1]
@@ -1325,63 +1311,48 @@ def calculate_entropy_rate_discrete(data, action_suffix='_action', history=1):
             # Calculate the base for this agent's actions
             base = calculate_base(data[agent_col])
 
-            # Calculate local entropy rate
-            local_entropy_rate_df = entropy_rate_discrete(data, agent_col, base, history)
+            # Calculate local block entropy
+            local_block_entropy_df = block_entropy_discrete(data, agent_col, base, block_size)
 
             # Append agent number and timestep values
-            local_entropy_rate_df['Agent'] = agent_number
-            local_entropy_rate_df['Timestep'] = data['Timestep'].values[:len(local_entropy_rate_df)]
-            result_df_list.append(local_entropy_rate_df)
+            local_block_entropy_df['Agent'] = agent_number
+            local_block_entropy_df['Timestep'] = data['Timestep'].values[:len(local_block_entropy_df)]
+            result_df_list.append(local_block_entropy_df)
 
         # Combine all results into a single DataFrame
         return pd.concat(result_df_list, ignore_index=True)
 
+# Plotting functions remain the same, just update variable names to reflect block entropy
 
-def plot_entropy_rate_heatmap(entropy_rate_df, output_path=None):
+def plot_block_entropy_heatmap_single(entropy_measures_df, output_path=None):
     """
-    Plot a heatmap or line graphs for the entropy rate values based on the DataFrame structure.
+    Plot a heatmap for the block entropy values (single run).
 
     Parameters:
-    - entropy_rate_df: pandas DataFrame containing entropy rate measures.
-    - output_path: Optional; path to save the plot (without extension).
-    """
-    if {'Mean_Entropy_Rate', 'Std_Error'}.issubset(entropy_rate_df.columns):
-        # Data has 'Repeat' column: Plot average entropy rate with standard error as separate subplots
-        plot_entropy_rate_linegraphs_subplots(entropy_rate_df, output_path)
-    else:
-        # Single run: Plot heatmap
-        plot_entropy_rate_heatmap_single(entropy_rate_df, output_path)
-
-
-def plot_entropy_rate_heatmap_single(entropy_rate_df, output_path=None):
-    """
-    Plot a heatmap for the entropy rate values (single run).
-
-    Parameters:
-    - entropy_rate_df: pandas DataFrame containing entropy rate measures.
+    - entropy_measures_df: pandas DataFrame containing block entropy measures.
     - output_path: Optional; path to save the plot (without extension).
     """
     # Create a pivot table for heatmap plotting
-    pivot_table = entropy_rate_df.pivot_table(
+    pivot_table = entropy_measures_df.pivot_table(
         index='Agent',
         columns='Timestep',
-        values='Entropy_Rate_Bits',
+        values='Block_Entropy_Bits',
         aggfunc='mean'
     )
 
     # Set up colormap and gridspec for plotting
     cmap = sns.color_palette("viridis", as_cmap=True)
     fig = plt.figure(figsize=(10, 8), dpi=300)
-    gs = plt.GridSpec(1, 2, width_ratios=[20, 1])  # Ratio of heatmap and colorbar
+    gs = gridspec.GridSpec(1, 2, width_ratios=[20, 1])  # Ratio of heatmap and colorbar
 
     # Heatmap
     ax = plt.subplot(gs[0])
     sns.heatmap(pivot_table, cmap=cmap, cbar=False, ax=ax, linewidths=0)
 
-    # Set axis labels and title using the updated font settings
+    # Set axis labels and title
     ax.set_xlabel('Time', labelpad=10)
     ax.set_ylabel('Agent', labelpad=10)
-    ax.set_title('Entropy Rate', pad=15)
+    ax.set_title('Marginal Block Entropy', pad=15)
 
     # Ticks and labels
     ax.set_yticks(np.arange(len(pivot_table.index)) + 0.5)
@@ -1396,7 +1367,7 @@ def plot_entropy_rate_heatmap_single(entropy_rate_df, output_path=None):
     sm.set_array([])
     cbar = plt.colorbar(sm, cax=cbar_ax)
     cbar.ax.tick_params(labelsize=14)
-    cbar.set_label('Entropy Rate (Bits)', size=18)
+    cbar.set_label('Block Entropy (Bits)', size=18)
 
     # Adjust layout
     plt.tight_layout(rect=[0, 0, 1, 0.95])
@@ -1409,20 +1380,19 @@ def plot_entropy_rate_heatmap_single(entropy_rate_df, output_path=None):
     # Show plot
     plt.show()
 
-
-def plot_entropy_rate_linegraphs_subplots(
-    aggregated_df,
-    output_path=None,
+def plot_block_entropy_linegraphs_subplots(
+    aggregated_df, 
+    output_path=None, 
     use_savgol=False,
     savgol_window=21,
     savgol_polyorder=2
 ):
     """
-    Plot separate line graphs for each agent showing average entropy rate with standard error shading,
+    Plot separate line graphs for each agent showing average block entropy with standard error shading,
     with optional Savitzky-Golay smoothing for smoother lines and shading.
 
     Parameters:
-    - aggregated_df: pandas DataFrame containing ['Agent', 'Timestep', 'Mean_Entropy_Rate', 'Std_Error']
+    - aggregated_df: pandas DataFrame containing ['Agent', 'Timestep', 'Mean_Block_Entropy', 'Std_Error']
     - output_path: Optional; path to save the plot (without extension).
     - use_savgol: Boolean; if True, apply Savitzky-Golay filter to smooth the data.
     - savgol_window: Window length for Savitzky-Golay filter (must be a positive odd integer and <= number of data points).
@@ -1434,12 +1404,13 @@ def plot_entropy_rate_linegraphs_subplots(
     # Define figure size: width proportional to number of agents, height fixed
     width_per_agent = 6
     height = 6
+    total_width = width_per_agent * num_agents
     sns.set(style="whitegrid")
 
     # Create a subplot for each agent
     fig, axes = plt.subplots(
-        1, num_agents,
-        figsize=(width_per_agent * num_agents, height),
+        1, num_agents, 
+        figsize=(width_per_agent * num_agents, height), 
         sharey=True
     )
 
@@ -1456,7 +1427,7 @@ def plot_entropy_rate_linegraphs_subplots(
 
         # Original timesteps and data
         x = agent_data['Timestep'].values
-        y = agent_data['Mean_Entropy_Rate'].values
+        y = agent_data['Mean_Block_Entropy'].values
         y_err = agent_data['Std_Error'].values
 
         if use_savgol:
@@ -1499,7 +1470,7 @@ def plot_entropy_rate_linegraphs_subplots(
             y_smooth = y
             y_err_smooth = y_err
 
-        # Plot the mean entropy rate with a thinner line
+        # Plot the mean block entropy with a thinner line
         ax.plot(
             x,
             y_smooth,
@@ -1520,7 +1491,7 @@ def plot_entropy_rate_linegraphs_subplots(
         ax.set_title(f'Agent {agent}', fontsize=18)
         ax.set_xlabel('Time', fontsize=16)
         if ax == axes[0]:
-            ax.set_ylabel('Entropy Rate (Bits)', fontsize=16)
+            ax.set_ylabel('Block Entropy (Bits)', fontsize=16)
         else:
             ax.set_ylabel('')
         ax.tick_params(axis='both', which='major', labelsize=14)
@@ -1531,7 +1502,7 @@ def plot_entropy_rate_linegraphs_subplots(
     labels = [f'Agent {agent}' for agent in agents]
     fig.legend(handles, labels, loc='upper right', fontsize=16, title='Agents', title_fontsize=18)
 
-    plt.suptitle('Average Entropy Rate with Standard Error', fontsize=20, y=0.95)
+    plt.suptitle('Average Marginal Block Entropy with Standard Error', fontsize=20, y=0.95)
     plt.tight_layout(rect=[0, 0, 1, 0.92])
 
     # Save the figure
@@ -1542,32 +1513,409 @@ def plot_entropy_rate_linegraphs_subplots(
     # Show plot
     plt.show()
 
-
-def entropy_rate(data, action_suffix='_action', history=1):
+def block_entropy(data, action_suffix='_action', block_size=3):
     """
-    Main function to calculate and plot entropy rate heatmap or line graphs based on the presence of 'Repeat' column.
+    Main function to calculate and plot block entropy heatmap or line graphs based on the presence of 'Repeat' column.
 
     Parameters:
     - data: pandas DataFrame containing the data.
     - action_suffix: suffix used to identify action columns.
-    - history: length of the past context to condition on.
+    - block_size: size of the block for block entropy calculation.
     """
 
-    # Plot settings
+    # Plot setting
     plt.rcParams['font.family'] = 'serif'
     plt.rcParams['font.serif'] = 'cmr10'  # Use the Computer Modern Roman font
     plt.rcParams['mathtext.fontset'] = 'cm'  # Use Computer Modern for math text
-    plt.rcParams['axes.formatter.use_mathtext'] = True
     plt.rcParams['axes.labelsize'] = 16  # Axis labels
     plt.rcParams['axes.titlesize'] = 20  # Title
     plt.rcParams['xtick.labelsize'] = 14  # X tick labels
     plt.rcParams['ytick.labelsize'] = 14  # Y tick labels
 
-    # Calculate entropy rate
-    entropy_rate_df = calculate_entropy_rate_discrete(data, action_suffix, history)
+    # Calculate block entropy
+    entropy_measures_df = calculate_block_entropy_discrete(data, action_suffix, block_size)
 
     # Plot heatmap or line graphs based on data structure
-    plot_entropy_rate_heatmap(entropy_rate_df)
+    plot_block_entropy_heatmap(entropy_measures_df)
+
+
+# ======================================================================================================================================================
+# ENTROPY RATE
+# ======================================================================================================================================================
+
+# import pandas as pd
+# import numpy as np
+# import matplotlib.pyplot as plt
+# import seaborn as sns
+# from jpype import startJVM, getDefaultJVMPath, isJVMStarted, JPackage
+# from matplotlib.ticker import MaxNLocator
+# import os
+# import warnings
+# from scipy.signal import savgol_filter
+
+
+# def calculate_base(actions):
+#     """
+#     Calculates the base for entropy rate as the number of unique distinct actions.
+
+#     Parameters:
+#     - actions: pandas Series containing action data.
+
+#     Returns:
+#     - Integer representing the base.
+#     """
+#     unique_actions = np.unique(actions.dropna().astype(int))  # Ensure no NaN values
+#     base = len(unique_actions)
+#     return base
+
+
+# def entropy_rate_discrete(data, variable, base, history=1):
+#     """
+#     Calculate discrete entropy rate for a single variable.
+
+#     Parameters:
+#     - data: pandas DataFrame containing the data.
+#     - variable: column name for which to calculate entropy rate.
+#     - base: base for the discrete variables.
+#     - history: length of the past context to condition on.
+
+#     Returns:
+#     - DataFrame with Entropy Rate (Bits) per timestep.
+#     """
+#     data_clean = data.replace([np.inf, -np.inf], np.nan).dropna(subset=[variable])
+#     train = data_clean[variable].values.astype(int)
+
+#     # from jpype import JPackage
+#     # from jpype.types import JArray, JInt
+#     # train = JArray(JInt)(train_np)
+
+#     print(f"Train Data: {train}")
+#     print(f"Type: {type(train)}")
+#     print(f"Shape: {train.shape}")
+#     print(f"Dtype: {train.dtype}")
+
+#     # Set up the entropy rate calculator
+#     calcClass = JPackage("infodynamics.measures.discrete").EntropyRateCalculatorDiscrete
+#     calc = calcClass(base, history)
+
+#     print(f'Base: {base}')
+#     print(F'History: {history}')
+
+#     # The initialise method requires an integer parameter, which is the history length
+#     #calc.initialise(history)
+#     calc.initialise(history)
+#     calc.addObservations(train)
+
+#     # Calculate entropy rate
+#     local_result_nats = calc.computeLocalFromPreviousObservations(train)
+
+#     # Convert nats to bits
+#     local_result_bits = np.array(local_result_nats) / np.log(2)
+
+#     # Return DataFrame
+#     return pd.DataFrame({'Entropy_Rate_Bits': local_result_bits})
+
+
+# def calculate_entropy_rate_discrete(data, action_suffix='_action', history=1):
+#     """
+#     Calculate entropy rate for each agent's actions. Handles both single runs and multiple repeats.
+
+#     Parameters:
+#     - data: pandas DataFrame containing the data.
+#     - action_suffix: suffix used to identify action columns.
+#     - history: length of the past context to condition on.
+
+#     Returns:
+#     - If 'Repeat' is not in data:
+#         - DataFrame with columns ['Entropy_Rate_Bits', 'Agent', 'Timestep']
+#       If 'Repeat' is in data:
+#         - DataFrame with columns ['Agent', 'Timestep', 'Mean_Entropy_Rate', 'Std_Error']
+#     """
+#     action_columns = [col for col in data.columns if col.endswith(action_suffix)]
+#     result_df_list = []
+
+#     if 'Repeat' in data.columns:
+#         # Multiple runs: Calculate entropy rate for each repeat
+#         grouped = data.groupby('Repeat')
+#         for repeat, group in grouped:
+#             for agent_col in action_columns:
+#                 # Extract agent number (assuming format like 'agent_1_action')
+#                 agent_number = agent_col.split('_')[1]
+
+#                 # Calculate the base for this agent's actions
+#                 base = calculate_base(group[agent_col])
+
+#                 # Calculate local entropy rate
+#                 local_entropy_rate_df = entropy_rate_discrete(group, agent_col, base, history)
+
+#                 # Append agent number and timestep values
+#                 local_entropy_rate_df['Agent'] = agent_number
+#                 local_entropy_rate_df['Timestep'] = group['Timestep'].values[:len(local_entropy_rate_df)]
+#                 local_entropy_rate_df['Repeat'] = repeat
+#                 result_df_list.append(local_entropy_rate_df)
+
+#         # Combine all results into a single DataFrame
+#         combined_df = pd.concat(result_df_list, ignore_index=True)
+
+#         # Calculate mean and standard error across repeats
+#         aggregated_df = combined_df.groupby(['Agent', 'Timestep']).agg(
+#             Mean_Entropy_Rate=('Entropy_Rate_Bits', 'mean'),
+#             Std_Error=('Entropy_Rate_Bits', 'sem')
+#         ).reset_index()
+
+#         return aggregated_df
+#     else:
+#         # Single run: Calculate entropy rate normally
+#         for agent_col in action_columns:
+#             # Extract agent number
+#             agent_number = agent_col.split('_')[1]
+
+#             # Calculate the base for this agent's actions
+#             base = calculate_base(data[agent_col])
+
+#             # Calculate local entropy rate
+#             local_entropy_rate_df = entropy_rate_discrete(data, agent_col, base, history)
+
+#             # Append agent number and timestep values
+#             local_entropy_rate_df['Agent'] = agent_number
+#             local_entropy_rate_df['Timestep'] = data['Timestep'].values[:len(local_entropy_rate_df)]
+#             result_df_list.append(local_entropy_rate_df)
+
+#         # Combine all results into a single DataFrame
+#         return pd.concat(result_df_list, ignore_index=True)
+
+
+# def plot_entropy_rate_heatmap(entropy_rate_df, output_path=None):
+#     """
+#     Plot a heatmap or line graphs for the entropy rate values based on the DataFrame structure.
+
+#     Parameters:
+#     - entropy_rate_df: pandas DataFrame containing entropy rate measures.
+#     - output_path: Optional; path to save the plot (without extension).
+#     """
+#     if {'Mean_Entropy_Rate', 'Std_Error'}.issubset(entropy_rate_df.columns):
+#         # Data has 'Repeat' column: Plot average entropy rate with standard error as separate subplots
+#         plot_entropy_rate_linegraphs_subplots(entropy_rate_df, output_path)
+#     else:
+#         # Single run: Plot heatmap
+#         plot_entropy_rate_heatmap_single(entropy_rate_df, output_path)
+
+
+# def plot_entropy_rate_heatmap_single(entropy_rate_df, output_path=None):
+#     """
+#     Plot a heatmap for the entropy rate values (single run).
+
+#     Parameters:
+#     - entropy_rate_df: pandas DataFrame containing entropy rate measures.
+#     - output_path: Optional; path to save the plot (without extension).
+#     """
+#     # Create a pivot table for heatmap plotting
+#     pivot_table = entropy_rate_df.pivot_table(
+#         index='Agent',
+#         columns='Timestep',
+#         values='Entropy_Rate_Bits',
+#         aggfunc='mean'
+#     )
+
+#     # Set up colormap and gridspec for plotting
+#     cmap = sns.color_palette("viridis", as_cmap=True)
+#     fig = plt.figure(figsize=(10, 8), dpi=300)
+#     gs = plt.GridSpec(1, 2, width_ratios=[20, 1])  # Ratio of heatmap and colorbar
+
+#     # Heatmap
+#     ax = plt.subplot(gs[0])
+#     sns.heatmap(pivot_table, cmap=cmap, cbar=False, ax=ax, linewidths=0)
+
+#     # Set axis labels and title using the updated font settings
+#     ax.set_xlabel('Time', labelpad=10)
+#     ax.set_ylabel('Agent', labelpad=10)
+#     ax.set_title('Entropy Rate', pad=15)
+
+#     # Ticks and labels
+#     ax.set_yticks(np.arange(len(pivot_table.index)) + 0.5)
+#     ax.set_yticklabels(pivot_table.index)
+#     ax.xaxis.set_major_locator(MaxNLocator(integer=True, prune='both', nbins=6))
+#     ax.set_xticklabels([int(tick) for tick in ax.get_xticks()])
+
+#     # Colorbar
+#     cbar_ax = plt.subplot(gs[1])
+#     norm = plt.Normalize(vmin=pivot_table.values.min(), vmax=pivot_table.values.max())
+#     sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+#     sm.set_array([])
+#     cbar = plt.colorbar(sm, cax=cbar_ax)
+#     cbar.ax.tick_params(labelsize=14)
+#     cbar.set_label('Entropy Rate (Bits)', size=18)
+
+#     # Adjust layout
+#     plt.tight_layout(rect=[0, 0, 1, 0.95])
+
+#     # Save the figure
+#     if output_path is not None:
+#         plt.savefig(f'{output_path}.pdf', format='pdf', bbox_inches='tight')
+#         plt.savefig(f'{output_path}.png', format='png', dpi=300, bbox_inches='tight')
+
+#     # Show plot
+#     plt.show()
+
+
+# def plot_entropy_rate_linegraphs_subplots(
+#     aggregated_df,
+#     output_path=None,
+#     use_savgol=False,
+#     savgol_window=21,
+#     savgol_polyorder=2
+# ):
+#     """
+#     Plot separate line graphs for each agent showing average entropy rate with standard error shading,
+#     with optional Savitzky-Golay smoothing for smoother lines and shading.
+
+#     Parameters:
+#     - aggregated_df: pandas DataFrame containing ['Agent', 'Timestep', 'Mean_Entropy_Rate', 'Std_Error']
+#     - output_path: Optional; path to save the plot (without extension).
+#     - use_savgol: Boolean; if True, apply Savitzky-Golay filter to smooth the data.
+#     - savgol_window: Window length for Savitzky-Golay filter (must be a positive odd integer and <= number of data points).
+#     - savgol_polyorder: Polynomial order for Savitzky-Golay filter (must be less than savgol_window).
+#     """
+#     agents = aggregated_df['Agent'].unique()
+#     num_agents = len(agents)
+
+#     # Define figure size: width proportional to number of agents, height fixed
+#     width_per_agent = 6
+#     height = 6
+#     sns.set(style="whitegrid")
+
+#     # Create a subplot for each agent
+#     fig, axes = plt.subplots(
+#         1, num_agents,
+#         figsize=(width_per_agent * num_agents, height),
+#         sharey=True
+#     )
+
+#     # If only one agent, axes is not a list
+#     if num_agents == 1:
+#         axes = [axes]
+
+#     # Define a color palette
+#     palette = sns.color_palette("viridis", n_colors=num_agents)
+#     color_dict = dict(zip(agents, palette))
+
+#     for ax, agent in zip(axes, agents):
+#         agent_data = aggregated_df[aggregated_df['Agent'] == agent].sort_values('Timestep')
+
+#         # Original timesteps and data
+#         x = agent_data['Timestep'].values
+#         y = agent_data['Mean_Entropy_Rate'].values
+#         y_err = agent_data['Std_Error'].values
+
+#         if use_savgol:
+#             # Validate Savitzky-Golay parameters
+#             if savgol_window % 2 == 0 or savgol_window <= 0:
+#                 warnings.warn(
+#                     f"Agent {agent}: Savitzky-Golay window size must be a positive odd integer. "
+#                     f"Received window={savgol_window}. Skipping Savitzky-Golay filtering."
+#                 )
+#                 y_smooth = y
+#                 y_err_smooth = y_err
+#             elif savgol_window > len(x):
+#                 warnings.warn(
+#                     f"Agent {agent}: Savitzky-Golay window size ({savgol_window}) is larger than the number of data points ({len(x)}). "
+#                     f"Skipping Savitzky-Golay filtering."
+#                 )
+#                 y_smooth = y
+#                 y_err_smooth = y_err
+#             elif savgol_polyorder >= savgol_window:
+#                 warnings.warn(
+#                     f"Agent {agent}: Savitzky-Golay polyorder ({savgol_polyorder}) must be less than window size ({savgol_window}). "
+#                     f"Skipping Savitzky-Golay filtering."
+#                 )
+#                 y_smooth = y
+#                 y_err_smooth = y_err
+#             else:
+#                 try:
+#                     # Apply Savitzky-Golay filter
+#                     y_smooth = savgol_filter(y, window_length=savgol_window, polyorder=savgol_polyorder)
+#                     y_err_smooth = savgol_filter(y_err, window_length=savgol_window, polyorder=savgol_polyorder)
+#                 except Exception as e:
+#                     warnings.warn(
+#                         f"Agent {agent}: Savitzky-Golay filtering failed with error: {e}. "
+#                         f"Skipping Savitzky-Golay filtering."
+#                     )
+#                     y_smooth = y
+#                     y_err_smooth = y_err
+#         else:
+#             # No smoothing; use original data
+#             y_smooth = y
+#             y_err_smooth = y_err
+
+#         # Plot the mean entropy rate with a thinner line
+#         ax.plot(
+#             x,
+#             y_smooth,
+#             label=f'Agent {agent}',
+#             color=color_dict[agent],
+#             linewidth=1  # Thinner lines
+#         )
+
+#         # Shade the standard error with adjusted transparency
+#         ax.fill_between(
+#             x,
+#             y_smooth - y_err_smooth,
+#             y_smooth + y_err_smooth,
+#             color=color_dict[agent],
+#             alpha=0.2  # Increased alpha for better visibility
+#         )
+
+#         ax.set_title(f'Agent {agent}', fontsize=18)
+#         ax.set_xlabel('Time', fontsize=16)
+#         if ax == axes[0]:
+#             ax.set_ylabel('Entropy Rate (Bits)', fontsize=16)
+#         else:
+#             ax.set_ylabel('')
+#         ax.tick_params(axis='both', which='major', labelsize=14)
+#         ax.legend().set_visible(False)  # Hide individual legends
+
+#     # Create a single legend for all subplots
+#     handles = [plt.Line2D([0], [0], color=color_dict[agent], lw=2) for agent in agents]
+#     labels = [f'Agent {agent}' for agent in agents]
+#     fig.legend(handles, labels, loc='upper right', fontsize=16, title='Agents', title_fontsize=18)
+
+#     plt.suptitle('Average Entropy Rate with Standard Error', fontsize=20, y=0.95)
+#     plt.tight_layout(rect=[0, 0, 1, 0.92])
+
+#     # Save the figure
+#     if output_path is not None:
+#         plt.savefig(f'{output_path}.pdf', format='pdf', bbox_inches='tight')
+#         plt.savefig(f'{output_path}.png', format='png', dpi=300, bbox_inches='tight')
+
+#     # Show plot
+#     plt.show()
+
+
+# def entropy_rate(data, action_suffix='_action', history=1):
+#     """
+#     Main function to calculate and plot entropy rate heatmap or line graphs based on the presence of 'Repeat' column.
+
+#     Parameters:
+#     - data: pandas DataFrame containing the data.
+#     - action_suffix: suffix used to identify action columns.
+#     - history: length of the past context to condition on.
+#     """
+
+#     # Plot settings
+#     plt.rcParams['font.family'] = 'serif'
+#     plt.rcParams['font.serif'] = 'cmr10'  # Use the Computer Modern Roman font
+#     plt.rcParams['mathtext.fontset'] = 'cm'  # Use Computer Modern for math text
+#     plt.rcParams['axes.formatter.use_mathtext'] = True
+#     plt.rcParams['axes.labelsize'] = 16  # Axis labels
+#     plt.rcParams['axes.titlesize'] = 20  # Title
+#     plt.rcParams['xtick.labelsize'] = 14  # X tick labels
+#     plt.rcParams['ytick.labelsize'] = 14  # Y tick labels
+
+#     # Calculate entropy rate
+#     entropy_rate_df = calculate_entropy_rate_discrete(data, action_suffix, history)
+
+#     # Plot heatmap or line graphs based on data structure
+#     plot_entropy_rate_heatmap(entropy_rate_df)
 
 # ======================================================================================================================================================
 # CONDITIONAL MUTUAL INFORMATION 
@@ -2827,13 +3175,19 @@ def predictive_information_composite(data, action_suffix='_action', past_window=
 
 
 
+
+
+# ======================================================================================================================================================
+# PREDICTIVE INFORMATION SCALING
+# ======================================================================================================================================================
+
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 
 def calculate_average_predictive_information(data, action_suffix, max_past_window=4, future_window=1):
     """
-    Calculate average Predictive Information (PI) over a range of past windows.
+    Calculate average Predictive Information (PI) and standard error over a range of past windows.
     """
     avg_pi_results = []
 
@@ -2842,27 +3196,38 @@ def calculate_average_predictive_information(data, action_suffix, max_past_windo
         # Calculate Predictive Information for this past window
         aggregated_df = calculate_pi_with_repeats(data, action_suffix, past_window, future_window)
 
-        # Calculate the mean Predictive Information across all agents and timesteps
-        avg_pi = aggregated_df['mean_pi'].mean()
+        # Calculate mean and standard error of Predictive Information
+        mean_pi = aggregated_df['mean_pi'].mean()
+        std_err_pi = aggregated_df['mean_pi'].sem()  # Standard error of the mean
         
-        # Store the result (past window size and corresponding average PI)
-        avg_pi_results.append((past_window, avg_pi))
+        # Store the result (past window size, mean PI, and standard error)
+        avg_pi_results.append((past_window, mean_pi, std_err_pi))
 
     # Convert the results to a DataFrame
-    avg_pi_df = pd.DataFrame(avg_pi_results, columns=['Past Window (k)', 'Average Predictive Information'])
+    avg_pi_df = pd.DataFrame(avg_pi_results, columns=['Block length (k)', 'Average Predictive Information', 'Standard Error'])
     
     return avg_pi_df
 
 def plot_avg_pi_vs_past_window(avg_pi_df):
     """
-    Plot Average Predictive Information against Past Window (k).
+    Plot Average Predictive Information against Block length (k) with shaded standard error bars.
     """
     plt.figure(figsize=(10, 6))
-    plt.plot(avg_pi_df['Past Window (k)'], avg_pi_df['Average Predictive Information'], marker='o', linestyle='-')
-    plt.xlabel('Past Window (k)', fontsize=14)
+    
+    # Convert columns to NumPy arrays
+    x = avg_pi_df['Block length (k)'].to_numpy()
+    y = avg_pi_df['Average Predictive Information'].to_numpy()
+    y_err = avg_pi_df['Standard Error'].to_numpy()
+    
+    # Plot line with shaded standard error
+    plt.plot(x, y, marker='o', linestyle='-', color='b', label='Average Predictive Information')
+    plt.fill_between(x, y - y_err, y + y_err, color='b', alpha=0.2, label='Standard Error')
+    
+    plt.xlabel('Block length (k)', fontsize=14)
     plt.ylabel('Average Predictive Information (Bits)', fontsize=14)
-    plt.title('Average Predictive Information vs Past Window (k)', fontsize=16)
+    plt.title('Average Predictive Information vs Block length (k)', fontsize=16)
     plt.grid(True)
+    plt.legend()
     plt.show()
 
 
@@ -6971,3 +7336,391 @@ def multi_information(data, action_suffix='_action'):
     multi_info_df = calculate_multi_information_discrete(data, action_suffix)
     plot_multi_information(multi_info_df)
     
+
+
+
+
+# ======================================================================================================================================================
+# ENTROPY RATE
+# ======================================================================================================================================================
+
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+from collections import defaultdict
+from math import log2
+from scipy.signal import savgol_filter
+import warnings
+
+# Function to compute local entropy rate
+import numpy as np
+import pandas as pd
+from collections import defaultdict
+from math import log2
+
+# Function to compute local entropy rate for discrete actions, initializing missing initial entries to zero
+def compute_local_entropy_rate(sequence, history_length=2):
+    """
+    Manually computes the local entropy rate for a discrete sequence.
+    
+    Parameters:
+    - sequence (list): The sequence of discrete states as integers.
+    - history_length (int): The length of history to condition on.
+    
+    Returns:
+    - average_entropy_rate (float): The average entropy rate of the sequence.
+    - local_entropies (list): The list of local entropy rates for each time point.
+    """
+    conditional_counts = defaultdict(lambda: defaultdict(int))
+    for t in range(history_length, len(sequence)):
+        history = tuple(sequence[t-history_length:t])
+        next_state = sequence[t]
+        conditional_counts[history][next_state] += 1
+
+    # Initialize local_entropies with zeros for the first 'history_length' entries
+    local_entropies = [0] * len(sequence)
+    for t in range(history_length, len(sequence)):
+        history = tuple(sequence[t-history_length:t])
+        next_state_counts = conditional_counts[history]
+        total_count = sum(next_state_counts.values())
+        history_entropy = -sum((count / total_count) * log2(count / total_count)
+                               for count in next_state_counts.values())
+        local_entropies[t] = history_entropy
+
+    # Calculate the average entropy rate, excluding the initial zeros
+    average_entropy_rate = np.mean(local_entropies[history_length:])
+    return average_entropy_rate, local_entropies
+
+# Function to calculate entropy rate across agents and format output with timesteps starting from 1
+def calculate_entropy_rate_discrete(data, action_suffix='_action', history_length=2):
+    """
+    Calculates entropy rate for each agent across repeats and outputs results with timesteps starting at 1.
+    
+    Parameters:
+    - data: pandas DataFrame containing the data.
+    - action_suffix: suffix used to identify action columns.
+    - history_length: length of history to condition on for entropy rate calculation.
+    
+    Returns:
+    - DataFrame with columns ['Agent', 'Timestep', 'Entropy_Rate_Bits'] and zeroed initial entries where history is insufficient.
+    """
+    result_df_list = []
+    grouped = data.groupby('Repeat') if 'Repeat' in data.columns else [(None, data)]
+
+    for repeat, group in grouped:
+        for agent_col in [col for col in group.columns if col.endswith(action_suffix)]:
+            agent_number = agent_col.split('_')[1]
+            _, local_rates = compute_local_entropy_rate(group[agent_col].values, history_length)
+            
+            # Store results with timesteps starting at 1
+            for t, rate in enumerate(local_rates, start=1):
+                result_df_list.append({
+                    'Repeat': repeat,
+                    'Agent': agent_number,
+                    'Timestep': t,
+                    'Entropy_Rate_Bits': rate
+                })
+
+    entropy_rate_df = pd.DataFrame(result_df_list)
+
+    # If there are multiple repeats, calculate mean and standard error for plotting
+    if 'Repeat' in entropy_rate_df.columns and entropy_rate_df['Repeat'].nunique() > 1:
+        aggregated_df = entropy_rate_df.groupby(['Agent', 'Timestep']).agg(
+            Mean_Entropy_Rate=('Entropy_Rate_Bits', 'mean'),
+            Std_Error=('Entropy_Rate_Bits', 'sem')
+        ).reset_index()
+        return aggregated_df
+    else:
+        return entropy_rate_df
+
+# Plot entropy rate heatmap or line graphs based on data structure
+def plot_entropy_rate_heatmap(entropy_rate_measures_df, output_path=None):
+    if {'Mean_Entropy_Rate', 'Std_Error'}.issubset(entropy_rate_measures_df.columns):
+        plot_entropy_rate_linegraphs_subplots(entropy_rate_measures_df, output_path)
+    else:
+        plot_entropy_rate_heatmap_single(entropy_rate_measures_df, output_path)
+
+# Helper function for plotting a single heatmap
+def plot_entropy_rate_heatmap_single(entropy_rate_measures_df, output_path=None):
+    pivot_table = entropy_rate_measures_df.pivot_table(index='Agent', columns='Timestep', values='Entropy_Rate_Bits', aggfunc='mean')
+    cmap = sns.color_palette("viridis", as_cmap=True)
+    fig = plt.figure(figsize=(10, 8), dpi=300)
+    gs = plt.GridSpec(1, 2, width_ratios=[20, 1])
+
+    ax = plt.subplot(gs[0])
+    sns.heatmap(pivot_table, cmap=cmap, cbar=False, ax=ax, linewidths=0)
+    ax.set_xlabel('Time')
+    ax.set_ylabel('Agent')
+    ax.set_title('Entropy Rate Heatmap')
+
+    cbar_ax = plt.subplot(gs[1])
+    norm = plt.Normalize(vmin=pivot_table.values.min(), vmax=pivot_table.values.max())
+    sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+    sm.set_array([])
+    cbar = plt.colorbar(sm, cax=cbar_ax)
+    cbar.set_label('Entropy Rate (Bits)')
+
+    plt.tight_layout(rect=[0, 0, 1, 0.95])
+    if output_path is not None:
+        plt.savefig(f'{output_path}.pdf', format='pdf', bbox_inches='tight')
+        plt.savefig(f'{output_path}.png', format='png', dpi=300, bbox_inches='tight')
+    plt.show()
+
+# Plot line graphs with optional Savitzky-Golay filtering
+def plot_entropy_rate_linegraphs_subplots(aggregated_df, output_path=None, use_savgol=False, savgol_window=21, savgol_polyorder=2):
+    agents = aggregated_df['Agent'].unique()
+    num_agents = len(agents)
+    width_per_agent = 6
+    height = 6
+    total_width = width_per_agent * num_agents
+    sns.set(style="whitegrid")
+
+    fig, axes = plt.subplots(1, num_agents, figsize=(total_width, height), sharey=True)
+    if num_agents == 1:
+        axes = [axes]
+    palette = sns.color_palette("viridis", n_colors=num_agents)
+    color_dict = dict(zip(agents, palette))
+
+    for ax, agent in zip(axes, agents):
+        agent_data = aggregated_df[aggregated_df['Agent'] == agent].sort_values('Timestep')
+        x = agent_data['Timestep'].values
+        y = agent_data['Mean_Entropy_Rate'].values
+        y_err = agent_data['Std_Error'].values
+
+        if use_savgol:
+            if savgol_window % 2 == 0 or savgol_window <= 0 or savgol_window > len(x) or savgol_polyorder >= savgol_window:
+                warnings.warn("Skipping Savitzky-Golay filtering due to parameter issues.")
+                y_smooth, y_err_smooth = y, y_err
+            else:
+                y_smooth = savgol_filter(y, window_length=savgol_window, polyorder=savgol_polyorder)
+                y_err_smooth = savgol_filter(y_err, window_length=savgol_window, polyorder=savgol_polyorder)
+        else:
+            y_smooth, y_err_smooth = y, y_err
+
+        ax.plot(x, y_smooth, label=f'Agent {agent}', color=color_dict[agent], linewidth=1)
+        ax.fill_between(x, y_smooth - y_err_smooth, y_smooth + y_err_smooth, color=color_dict[agent], alpha=0.2)
+        ax.set_title(f'Agent {agent}')
+        ax.set_xlabel('Time')
+        if ax == axes[0]:
+            ax.set_ylabel('Entropy Rate (Bits)')
+        ax.legend().set_visible(False)
+
+    handles = [plt.Line2D([0], [0], color=color_dict[agent], lw=2) for agent in agents]
+    labels = [f'Agent {agent}' for agent in agents]
+    fig.legend(handles, labels, loc='upper right', title='Agents')
+
+    plt.suptitle('Average Entropy Rate with Standard Error')
+    plt.tight_layout(rect=[0, 0, 1, 0.92])
+    if output_path:
+        plt.savefig(f'{output_path}.pdf', format='pdf', bbox_inches='tight')
+        plt.savefig(f'{output_path}.png', format='png', dpi=300, bbox_inches='tight')
+    plt.show()
+
+# Main function for calculating and plotting entropy rate
+def entropy_rate(data, action_suffix='_action', history_length=2):
+    """
+    Main function to calculate and plot entropy rate heatmap or line graphs based on the presence of 'Repeat' column.
+    
+    Parameters:
+    - data: pandas DataFrame containing the data.
+    - action_suffix: suffix used to identify action columns.
+    - history_length: length of history to condition on for entropy rate calculation.
+    """
+    # Plot settings
+    plt.rcParams['font.family'] = 'serif'
+    plt.rcParams['font.serif'] = 'cmr10'
+    plt.rcParams['mathtext.fontset'] = 'cm'
+    plt.rcParams['axes.formatter.use_mathtext'] = True
+    plt.rcParams['axes.labelsize'] = 16
+    plt.rcParams['axes.titlesize'] = 20
+    plt.rcParams['xtick.labelsize'] = 14
+    plt.rcParams['ytick.labelsize'] = 14
+
+    # Calculate entropy rate
+    entropy_rate_measures_df = calculate_entropy_rate_discrete(data, action_suffix, history_length)
+
+    # Plot heatmap or line graphs based on data structure
+    plot_entropy_rate_heatmap(entropy_rate_measures_df)
+
+    return entropy_rate_measures_df
+
+
+
+
+
+
+
+# ======================================================================================================================================================
+# ENTROPY RATE COMPOSITE
+# ======================================================================================================================================================
+
+# ======================================================================================================================================================
+# COMPOSITE ENTROPY RATE
+# ======================================================================================================================================================
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+from collections import defaultdict
+from math import log2
+from scipy.signal import savgol_filter
+import warnings
+
+# Function to compute local entropy rate for a single composite sequence, with initial missing entries set to zero
+def compute_local_entropy_rate_composite(sequence, history_length=2):
+    """
+    Computes the local entropy rate for a sequence of composite actions.
+    
+    Parameters:
+    - sequence (list): The sequence of composite actions as strings.
+    - history_length (int): The length of history to condition on.
+    
+    Returns:
+    - average_entropy_rate (float): The average entropy rate of the sequence.
+    - local_entropies (list): The list of local entropy rates for each time point.
+    """
+    conditional_counts = defaultdict(lambda: defaultdict(int))
+    for t in range(history_length, len(sequence)):
+        history = tuple(sequence[t-history_length:t])
+        next_state = sequence[t]
+        conditional_counts[history][next_state] += 1
+
+    # Initialize local_entropies with zeros for initial entries where history is insufficient
+    local_entropies = [0] * len(sequence)
+    for t in range(history_length, len(sequence)):
+        history = tuple(sequence[t-history_length:t])
+        next_state_counts = conditional_counts[history]
+        total_count = sum(next_state_counts.values())
+        history_entropy = -sum((count / total_count) * log2(count / total_count)
+                               for count in next_state_counts.values())
+        local_entropies[t] = history_entropy
+
+    # Calculate the average entropy rate from valid entries only (i.e., exclude initial zero entries)
+    average_entropy_rate = np.mean(local_entropies[history_length:])
+    return average_entropy_rate, local_entropies
+
+# Function to calculate entropy rate for composite variable across repeats
+def calculate_entropy_rate_composite(data, action_suffix='_action', history_length=2):
+    """
+    Calculates entropy rate for a composite variable created from agent actions, with averaging over repeats.
+    
+    Parameters:
+    - data: pandas DataFrame containing the data.
+    - action_suffix: suffix used to identify action columns.
+    - history_length: length of history to condition on for entropy rate calculation.
+    
+    Returns:
+    - DataFrame with columns ['Timestep', 'Entropy_Rate_Bits'] and zeroed initial entries where history is insufficient.
+    """
+    # Generate composite sequence by concatenating action columns
+    action_columns = [col for col in data.columns if col.endswith(action_suffix)]
+    data['Composite'] = data[action_columns].astype(str).agg(''.join, axis=1)
+    
+    result_df_list = []
+    grouped = data.groupby('Repeat') if 'Repeat' in data.columns else [(None, data)]
+
+    for repeat, group in grouped:
+        sequence = group['Composite'].values
+        _, local_rates = compute_local_entropy_rate_composite(sequence, history_length)
+        
+        # Store results with timesteps starting at 1
+        for t, rate in enumerate(local_rates, start=1):
+            result_df_list.append({
+                'Repeat': repeat,
+                'Timestep': t,
+                'Entropy_Rate_Bits': rate
+            })
+
+    entropy_rate_df = pd.DataFrame(result_df_list)
+
+    # If there are multiple repeats, calculate mean and standard error for plotting
+    if 'Repeat' in entropy_rate_df.columns and entropy_rate_df['Repeat'].nunique() > 1:
+        aggregated_df = entropy_rate_df.groupby(['Timestep']).agg(
+            Mean_Entropy_Rate=('Entropy_Rate_Bits', 'mean'),
+            Std_Error=('Entropy_Rate_Bits', 'sem')
+        ).reset_index()
+        return aggregated_df
+    else:
+        return entropy_rate_df
+
+# Plot entropy rate heatmap or line graphs based on data structure
+def plot_entropy_rate_composite_heatmap(entropy_rate_measures_df, output_path=None):
+    if {'Mean_Entropy_Rate', 'Std_Error'}.issubset(entropy_rate_measures_df.columns):
+        plot_entropy_rate_composite_linegraphs(entropy_rate_measures_df, output_path)
+    else:
+        plot_entropy_rate_composite_heatmap_single(entropy_rate_measures_df, output_path)
+
+# Helper function for plotting a single heatmap
+def plot_entropy_rate_composite_heatmap_single(entropy_rate_measures_df, output_path=None):
+    pivot_table = entropy_rate_measures_df.pivot_table(index='Timestep', values='Entropy_Rate_Bits', aggfunc='mean')
+    cmap = sns.color_palette("viridis", as_cmap=True)
+    fig, ax = plt.subplots(figsize=(10, 8), dpi=300)
+    sns.heatmap(pivot_table, cmap=cmap, cbar=True, ax=ax, linewidths=0)
+    ax.set_xlabel('Time')
+    ax.set_ylabel('Timestep')
+    ax.set_title('Entropy Rate Heatmap for Composite Variable')
+
+    if output_path is not None:
+        plt.savefig(f'{output_path}.pdf', format='pdf', bbox_inches='tight')
+        plt.savefig(f'{output_path}.png', format='png', dpi=300, bbox_inches='tight')
+    plt.show()
+
+# Plot line graphs with optional Savitzky-Golay filtering
+def plot_entropy_rate_composite_linegraphs(aggregated_df, output_path=None, use_savgol=False, savgol_window=21, savgol_polyorder=2):
+    sns.set(style="whitegrid")
+    x = aggregated_df['Timestep'].values
+    y = aggregated_df['Mean_Entropy_Rate'].values
+    y_err = aggregated_df['Std_Error'].values
+
+    if use_savgol:
+        if savgol_window % 2 == 0 or savgol_window <= 0 or savgol_window > len(x) or savgol_polyorder >= savgol_window:
+            warnings.warn("Skipping Savitzky-Golay filtering due to parameter issues.")
+            y_smooth, y_err_smooth = y, y_err
+        else:
+            y_smooth = savgol_filter(y, window_length=savgol_window, polyorder=savgol_polyorder)
+            y_err_smooth = savgol_filter(y_err, window_length=savgol_window, polyorder=savgol_polyorder)
+    else:
+        y_smooth, y_err_smooth = y, y_err
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.plot(x, y_smooth, color='blue', linewidth=1)
+    ax.fill_between(x, y_smooth - y_err_smooth, y_smooth + y_err_smooth, color='blue', alpha=0.2)
+    ax.set_xlabel('Time')
+    ax.set_ylabel('Entropy Rate (Bits)')
+    ax.set_title('Average Entropy Rate with Standard Error for Composite Variable')
+
+    if output_path:
+        plt.savefig(f'{output_path}.pdf', format='pdf', bbox_inches='tight')
+        plt.savefig(f'{output_path}.png', format='png', dpi=300, bbox_inches='tight')
+    plt.show()
+
+# Main function for calculating and plotting entropy rate for composite variable
+def entropy_rate_composite(data, action_suffix='_action', history_length=2):
+    """
+    Main function to calculate and plot entropy rate for composite variable.
+    
+    Parameters:
+    - data: pandas DataFrame containing the data.
+    - action_suffix: suffix used to identify action columns.
+    - history_length: length of history to condition on for entropy rate calculation.
+    """
+    # Plot settings
+    plt.rcParams['font.family'] = 'serif'
+    plt.rcParams['font.serif'] = 'cmr10'
+    plt.rcParams['mathtext.fontset'] = 'cm'
+    plt.rcParams['axes.formatter.use_mathtext'] = True
+    plt.rcParams['axes.labelsize'] = 16
+    plt.rcParams['axes.titlesize'] = 20
+    plt.rcParams['xtick.labelsize'] = 14
+    plt.rcParams['ytick.labelsize'] = 14
+
+    # Calculate entropy rate
+    entropy_rate_measures_df = calculate_entropy_rate_composite(data, action_suffix, history_length)
+
+    # Plot heatmap or line graphs based on data structure
+    plot_entropy_rate_composite_heatmap(entropy_rate_measures_df)
+
+    return entropy_rate_measures_df
