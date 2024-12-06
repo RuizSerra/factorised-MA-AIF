@@ -7,7 +7,7 @@ Factorised Active Inference Agents for Multi-Agent Interactions
 
 ## Start here
 
-1. [`notebooks/`](./notebooks/)
+1. [`notebooks/`](https://github.com/RuizSerra/factorised-MA-AIF-notebooks) (separate repository with Jupyter notebooks)
     - `01 INFG 2x2.ipynb`: Jupyter notebook with simulation and plotting of iterated normal-form games (2-player, 2-action)
     - `01 INFG 3x2.ipynb`: Jupyter notebook with simulation and plotting of iterated normal-form games (3-player, 2-action)
     - `99 FAQ.ipynb`: Additional notebook with some explanations and examples
@@ -27,7 +27,6 @@ Factorised Active Inference Agents for Multi-Agent Interactions
 - [`scripts/`](./scripts/): Command-line scripts to run simulations and plot results
     - `INFG-simulate.py`: Run multiple simulations and store the results in a database
     - `INFG-plot.py`: Plot the results of multiple simulations
-- [`notebooks/`](./notebooks/): Jupyter notebooks and supporting code
 - [`docs/`](./docs/): Documentation and figures
 
 ## Scripts
