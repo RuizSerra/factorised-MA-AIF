@@ -47,12 +47,13 @@ class Agent:
             beta_0:float=10.,
             beta_1:float=10.,
             # Learning
-            A_prior_type:str='uniform',
-            B_prior_type:str='identity',
+            A_prior:Union[torch.Tensor, float]=99,  # identity
+            B_prior:Union[torch.Tensor, float]=0,   # uniform
             D_prior:Union[torch.Tensor, None]=None,
             E_prior:Union[torch.Tensor, None]=None,
             A_learning:bool=True,
             B_learning:bool=True,
+            B_learning_rate:Union[float, None]=0.05,
             learn_every_t_steps:int=24,
             learning_offset:int=6,
             decay:float=0.5,
@@ -74,10 +75,11 @@ class Agent:
             - beta_0 (float): The beta_0 hyperparameter
             - beta_1 (float): The beta_1 hyperparameter
             - decay (float): The decay rate
-            - A_prior_type (str): The type of prior for the observation model. One of ['identity', 'uniform']
-            - B_prior_type (str): The type of prior for the transition model. One of ['identity', 'uniform']
+            - A_prior (Union[torch.Tensor, float]): The prior for the observation model. If float, the strength of softmax (0 -> uniform, inf -> identity)
+            - B_prior (Union[torch.Tensor, float]): The prior for the transition model. If float, the strength of softmax (0 -> uniform, inf -> identity)
             - A_learning (bool): Whether the agent learns the observation model
             - B_learning (bool): Whether the agent learns the transition model
+            - B_learning_rate (Union[float, NoneType]): The learning rate for the transition model
             - learn_every_t_steps (int): The length of the interval for learning
             - A_BMR (Union[str, NoneType]): The Bayesian Model Reduction method for the observation model. One of ['identity', 'uniform', None]
             - B_BMR (Union[str, NoneType]): The Bayesian Model Reduction method for the transition model. One of ['identity', 'uniform', None]
@@ -93,22 +95,26 @@ class Agent:
         self.num_agents = num_agents = game_matrix.ndim  # Number of players (rank of game tensor)
 
         # Generative model parameters ------------------------------------------
-        if A_prior_type == 'identity':
-            self.A_params = torch.stack([torch.eye(num_actions) for _ in range(num_agents)]) + EPSILON  # Identity observation model prior
-        elif A_prior_type == 'uniform':
-            self.A_params = torch.ones((num_agents, num_actions, num_actions))  # Uniform observation model prior
+        if isinstance(A_prior, torch.Tensor):
+            self.A_params = A_prior
+        elif isinstance(A_prior, (int, float)):
+            self.A_params = torch.stack([
+                torch.softmax(A_prior * torch.eye(num_actions) + EPSILON, dim=-1)
+                for _ in range(num_agents)])  # Identity observation model prior
         else:
-            raise ValueError(f"Invalid A_prior_type: {A_prior_type}")
+            raise ValueError(f"Invalid A_prior: {A_prior}")
         self.A = self.A_params / self.A_params.sum(dim=1, keepdim=True)
 
-        if B_prior_type == 'identity':
+        if isinstance(B_prior, torch.Tensor):
+            self.B_params = B_prior
+        elif isinstance(B_prior, (int, float)):
             self.B_params = torch.stack([
-                torch.eye(num_actions) 
+                torch.softmax(B_prior * torch.eye(num_actions) + EPSILON, dim=-1)
                 for _ in range(num_actions) 
                 for _ in range(num_agents)
-            ]).reshape(num_agents, num_actions, num_actions, num_actions)
-        elif B_prior_type == 'uniform':
-            self.B_params = torch.ones((num_agents, num_actions, num_actions, num_actions))
+            ]).reshape(num_agents, num_actions, num_actions, num_actions)  # shape: (funk): factor, action (u), next state, kurrent state
+        else:
+            raise ValueError(f"Invalid B_prior: {B_prior}")
         self.B = self.B_params / self.B_params.sum(dim=2, keepdim=True)
 
         self.set_log_C(game_matrix)  # Log preference over observations (payoffs)
@@ -137,6 +143,7 @@ class Agent:
         self.current_random_offset_learning = random.randint(-self.learning_offset, self.learning_offset)  # Random offset for learning
         self.A_learning = A_learning  # Learn the observation model
         self.B_learning = B_learning  # Learn the transition model
+        self.B_learning_rate = B_learning_rate
         self.A_BMR = A_BMR
         self.B_BMR = B_BMR
         self.decay = decay  # Forgetting rate for learning
@@ -482,7 +489,7 @@ class Agent:
         
             # Novelty ----------------------------------------------------------
             if self.compute_novelty:
-                novelty[u_i_hat] += self.compute_A_novelty(u_i_hat)  # TODO: some sort of regularisation, novelty can be really large
+                novelty[u_i_hat] += self.compute_A_novelty(u_i_hat)
                 # TODO: B novelty?
 
         EFE = ambiguity + risk - novelty
@@ -645,21 +652,18 @@ class Agent:
 
         # Novelty ----------------------------------------------------------
         if self.compute_novelty:
-            raise NotImplementedError("Novelty computation implementation needs work!!")
-            novelty += self.compute_A_novelty(u)  # TODO: some sort of regularisation, novelty can be really large
-            # TODO: B novelty?
-
-        # EFE of this action ---------------------------------------------------
-        EFE = ambiguity + risk - novelty
-        
-        # Check other ways of computing EFE ------------------------------------
+            if self.A_learning:
+                novelty += self.compute_A_novelty(q_s_u, q_o_u)
+            if self.B_learning:
+                novelty += self.compute_B_novelty(self.q_s, q_s_u, u) 
+        # EFE value checks -----------------------------------------------------
         salience = ppo_entropy - ambiguity
-        # assert salience >= -TOLERANCE, f"Salience term is not >= 0: {salience}, {ppo_entropy}, {ambiguity}"
+        # assert salience >= -TOLERANCE, f"Salience term is not >= 0: {salience}, {ambiguity}, {ppo_entropy}"
         # if not torch.all(salience >= -TOLERANCE):
         #     invalid_values = salience[salience < 0]
         #     raise AssertionError(f"Salience term is not >= 0. Invalid values: {invalid_values}")
-        EFE1 = -salience - pragmatic_value
-        EFE2 = risk + ambiguity
+        EFE1 = - pragmatic_value - salience - novelty
+        EFE2 = risk + ambiguity - novelty
 
         # Assert that the two tensors are close, and print the average percentage difference if they aren't
         percentage_diff = (torch.abs(EFE1 - EFE2) / ((EFE1 + EFE2) / 2)) * 100  # Element-wise percentage difference calculation
@@ -670,21 +674,63 @@ class Agent:
             Risk + Ambiguity = {EFE2}
             Average percentage difference = {avg_percentage_diff:.1f}%"""
 
+        EFE = -pragmatic_value - (salience + novelty)
+
         return EFE.unsqueeze(0), torch.tensor((ambiguity, risk, salience, pragmatic_value, novelty))
     
-    def compute_A_novelty(self, u_i):
+    def compute_A_novelty_ALGEBRAIC(self, q_s_u, u):
         '''
         Compute the novelty of the likelihood model A for action u_i
         '''
         novelty = 0
+        # Add a small constant to A_params to avoid W blowing up
+        A_params = self.A_params.clone().detach() + 0.5  # FIXME: softmax??
+        # A_params = self.A.clone().detach()
         # Da Costa et al. (2020; Eq. D.17)
-        W = 0.5 * (1/self.A_params - 1/self.A_params.sum(dim=1, keepdim=True))
+        W = 0.5 * (1/A_params - 1/A_params.sum(dim=1, keepdim=True))
         for factor_idx in range(self.num_agents):
-            s_pred = self.q_s_u[factor_idx, u_i]
+            s_pred = q_s_u[factor_idx]
             novelty += torch.dot(
                 self.A[factor_idx] @ s_pred, 
                 W[factor_idx] @ s_pred)
         return novelty
+    
+    def compute_A_novelty(self, q_s_u, q_o_u):
+
+        # A' = A + q_o_u x q_s_u
+        A_prime_params = self.A_params + torch.einsum(
+            'fs,fo->fos',  # (f, o, s): factor, observation, state
+            q_s_u,         # (f, s) 
+            q_o_u          # (f, o)
+        )
+        A_prime = A_prime_params / A_prime_params.sum(dim=1, keepdim=True)
+        # TODO: account for BMR?
+
+        # KL divergence D[ A' || A ] for each factor
+        kl_div = (
+            A_prime * torch.log(A_prime / (self.A + EPSILON) + EPSILON)
+        ).sum(dim=(1, 2))
+
+        return kl_div.sum()  # over factors
+    
+    def compute_B_novelty(self, q_s, q_s_u, u):
+
+        # B'[u] = B[u] + q_s_u x q_s
+        outer_product = torch.einsum(
+            'fn,fk->fnk',  # (f, n, k): factor, next (state), kurrent (state)
+            q_s_u,         # (f, n) 
+            q_s            # (f, k)
+        )
+        B_prime_params = self.B_params[:, u].squeeze() + self.B_learning_rate * outer_product
+        B_prime = B_prime_params / B_prime_params.sum(dim=1, keepdim=True)
+
+        # KL divergence D[ B'[u] || B[u] ] for each factor
+        kl_div = (
+            B_prime * torch.log(B_prime / (self.B[:, u].squeeze() + EPSILON) + EPSILON)
+        ).sum(dim=(1, 2))
+
+        return kl_div.sum()  # over factors
+
     
     def collect_policies(
             self,
@@ -813,12 +859,12 @@ class Agent:
 
     def learn_A(self):
 
-        # Expand dimensions to prepare for broadcasting
-        s_hist_expanded = self.q_s_history.unsqueeze(-2)  # Shape: (T, n_agents, 1, n_actions)
-        o_hist_expanded = self.o_history.unsqueeze(-1)  # Shape: (T, n_agents, n_actions, 1)
-
         # Perform the row-wise outer product
-        outer_products = s_hist_expanded * o_hist_expanded  # Shape: (T, n_agents, n_actions, n_actions)
+        outer_products = torch.einsum(  # Compute outer products
+            'tfs,tfo->tfos',   # t (time), f (factor), s (state), o (observation)
+            self.q_s_history, 
+            self.o_history
+        )  # Shape: (T, n_agents, n_actions, n_actions)
 
         # Posterior parameters
         delta_params = outer_products.mean(dim=0)  # Shape: (n_agents, n_actions, n_actions)
@@ -832,36 +878,65 @@ class Agent:
                     torch.eye(self.num_actions)
                     for _ in range(self.A.shape[0])
                 ]).view(*self.A.shape)
+
+                MIXTURE = 0.7
+                A_reduced = (
+                    MIXTURE * self.A_params 
+                    + (1 - MIXTURE) * A_reduced
+                )
+                A_reduced = A_reduced / A_reduced.sum(dim=1, keepdim=True)
+
+                # # Update model parameters if they reduce the free energy
+                # self.delta_F = []
+                # for factor_idx in range(len(self.q_s)):
+                #     delta_F = delta_free_energy(
+                #         A_posterior_params[factor_idx].flatten(), 
+                #         self.A_params[factor_idx].flatten(), 
+                #         A_reduced_params[factor_idx].flatten()
+                #     )
+                #     self.delta_F.append(delta_F)  # Data collection
+                #     if delta_F < 0:
+                #         # Reduced model is preferred -> replace full model with reduced model
+                #         self.A_params[factor_idx] = A_reduced_params[factor_idx]
+                #         # print(f"Factor {factor_idx}: Reduced model is preferred.")
+                #         # print(f"Delta F: {delta_F}")
+                #         # print(f"Reduced: {A_reduced_params[factor_idx]}")
+                #         # print(f"Posterior: {A_posterior_params[factor_idx]}")
+                #     else:
+                #         # Full model is preferred -> update posterior
+                #         self.A_params[factor_idx] = A_posterior_params[factor_idx]
+                    # print(delta_F, self.A_params[factor_idx].flatten(), A_posterior_params[factor_idx], A_reduced_params[factor_idx].flatten())
             elif self.A_BMR == 'uniform':
                 A_reduced = torch.ones_like(self.A_params)
+                raise NotImplementedError("Uniform BMR for A disabled.")
+            elif self.A_BMR == 'softmax':
+                STRENGTH = self.decay
+                A_reduced = F.softmax(
+                    STRENGTH * self.A_params,
+                    dim=-1
+                )
             else:
                 raise ValueError(f"Invalid A_BMR: {self.A_BMR}")
+            
+            A_prior = self.A_params / self.A_params.sum(dim=1, keepdim=True)
+            A_posterior = A_posterior_params / A_posterior_params.sum(dim=1, keepdim=True)
 
-            mixture = self.decay
-            A_reduced_params = (
-                mixture * self.A_params 
-                + (1 - mixture) * A_reduced
+            # Da Costa et al. (2020; Eq. 26)
+            # log E_{q(A)}[ p_reduced(A) / p(A) ]
+            evidence_differences = torch.log(
+                torch.einsum(
+                    'fos,fos->f',
+                    A_posterior,
+                    A_reduced / A_prior
+                )
             )
 
-            # Update model parameters if they reduce the free energy
-            self.delta_F = []
-            for factor_idx in range(len(self.q_s)):
-                delta_F = delta_free_energy(
-                    A_posterior_params[factor_idx].flatten(), 
-                    self.A_params[factor_idx].flatten(), 
-                    A_reduced_params[factor_idx].flatten()
-                )
-                self.delta_F.append(delta_F)  # Data collection
-                if delta_F < 0:
-                    # Reduced model is preferred -> replace full model with reduced model
-                    self.A_params[factor_idx] = A_reduced_params[factor_idx]
-                    # print(f"Factor {factor_idx}: Reduced model is preferred.")
-                    # print(f"Delta F: {delta_F}")
-                    # print(f"Reduced: {A_reduced_params[factor_idx]}")
-                    # print(f"Posterior: {A_posterior_params[factor_idx]}")
+            for factor_idx in range(self.num_agents):
+                if evidence_differences[factor_idx] > 0:
+                    self.A_params[factor_idx] = A_reduced[factor_idx]
                 else:
-                    # Full model is preferred -> update posterior
                     self.A_params[factor_idx] = A_posterior_params[factor_idx]
+
         else:
             self.A_params = A_posterior_params
         
@@ -873,21 +948,21 @@ class Agent:
         s_prev = self.q_s_history[:-1]  # Shape: (T-1, n_agents, n_actions)
         s_next = self.q_s_history[1:]  # Shape: (T-1, n_agents, n_actions)
         
-        # Expand dimensions to prepare for broadcasting
-        s_prev_expanded = s_prev.unsqueeze(-2)  # Shape: (T, n_agents, 1, n_actions)
-        s_next_expanded = s_next.unsqueeze(-1)  # Shape: (T, n_agents, n_actions, 1)
-
-        # Perform the row-wise outer product
-        outer_products = s_prev_expanded * s_next_expanded  # Shape: (T, n_agents, n_actions, n_actions)
+        outer_products = torch.einsum(  # Compute outer products
+            'tfn,tfk->tfnk',   # t (time), f (factor), n (next), k (kurrent)
+            s_next, 
+            s_prev
+        )  # Shape: (T-1, n_agents, n_actions, n_actions)
         T = outer_products.shape[0]
 
         # Update parameters for every transition (s, u, s') in the history
         B_posterior_params = self.B_params.clone()
+        LEARNING_RATE = self.B_learning_rate if self.B_learning_rate is not None else 1/T
         for t in range(outer_products.shape[0]):
             # Likelihood parameters update
-            delta_params = outer_products[t] / T  # Shape: (n_agents, n_actions, n_actions)
+            delta_params = outer_products[t]  # Shape: (n_agents, n_actions, n_actions)
             u_it = self.u_history[t].item()   # Action u_i at time t
-            B_posterior_params[:, u_it] = self.B_params[:, u_it] + delta_params
+            B_posterior_params[:, u_it] = self.B_params[:, u_it] + LEARNING_RATE * delta_params
 
         # Bayesian Model Reduction ---------------------------------------------
         if self.B_BMR:
@@ -898,32 +973,61 @@ class Agent:
                     for action_idx in range(self.B.shape[1])
                     for factor_idx in range(self.B.shape[0])
                 ]).view(*self.B.shape)
+                raise NotImplementedError("Identity BMR for B disabled.")
+                # mixture = self.decay
+                # B_reduced_params = (
+                #     mixture * self.B_params 
+                #     + (1 - mixture) * B_reduced
+                # )
+
+                # # Update model parameters if they reduce the free energy
+                # self.delta_F = []
+                # for factor_idx in range(len(self.q_s)):
+                #     delta_F = delta_free_energy(
+                #         B_posterior_params[factor_idx].flatten(), 
+                #         self.B_params[factor_idx].flatten(), 
+                #         B_reduced_params[factor_idx].flatten()
+                #     )
+                #     self.delta_F.append(delta_F)  # Data collection
+                #     if delta_F < 0:
+                #         # Reduced model is preferred -> replace full model with reduced model
+                #         self.B_params[factor_idx] = B_reduced_params[factor_idx]
+                #     else:
+                #         # Full model is preferred -> update posterior
+                #         self.B_params[factor_idx] = B_posterior_params[factor_idx]
             elif self.B_BMR == 'uniform':
                 B_reduced = torch.ones_like(self.B_params)
+                raise NotImplementedError("Uniform BMR for B disabled.")
+            elif self.B_BMR == 'softmax':
+                STRENGTH = self.decay
+                B_reduced = F.softmax(
+                    STRENGTH * self.B_params.view(self.num_agents, self.num_actions, -1), 
+                    dim=-1
+                ).view_as(self.B_params)  # Shape: (n_agents, n_actions, n_actions, n_actions)
+                B_prior = self.B_params / self.B_params.sum(dim=2, keepdim=True)
+                B_posterior = B_posterior_params / B_posterior_params.sum(dim=2, keepdim=True)
+
+                # Da Costa et al. (2020; Eq. 26)
+                # log E_{q(B)}[ p_reduced(B) / p(B) ]
+                evidence_differences = torch.log(
+                    torch.einsum(
+                        'funk,funk->fu',
+                        B_posterior,
+                        B_reduced / B_prior
+                    )
+                )
+
+                for factor_idx in range(self.num_agents):
+                    for action_idx in range(self.num_actions):
+                        if evidence_differences[factor_idx, action_idx] > 0:
+                            self.B_params[factor_idx, action_idx] = B_reduced[factor_idx, action_idx]
+                            # print('Reduced', factor_idx, action_idx, B_reduced[factor_idx, action_idx])
+                        else:
+                            self.B_params[factor_idx, action_idx] = B_posterior_params[factor_idx, action_idx]
+
             else:
                 raise ValueError(f"Invalid B_BMR: {self.B_BMR}")
-            
-            mixture = self.decay
-            B_reduced_params = (
-                mixture * self.B_params 
-                + (1 - mixture) * B_reduced
-            )
 
-            # Update model parameters if they reduce the free energy
-            self.delta_F = []
-            for factor_idx in range(len(self.q_s)):
-                delta_F = delta_free_energy(
-                    B_posterior_params[factor_idx].flatten(), 
-                    self.B_params[factor_idx].flatten(), 
-                    B_reduced_params[factor_idx].flatten()
-                )
-                self.delta_F.append(delta_F)  # Data collection
-                if delta_F < 0:
-                    # Reduced model is preferred -> replace full model with reduced model
-                    self.B_params[factor_idx] = B_reduced_params[factor_idx]
-                else:
-                    # Full model is preferred -> update posterior
-                    self.B_params[factor_idx] = B_posterior_params[factor_idx]
         else:
             self.B_params = B_posterior_params
 

@@ -14,6 +14,7 @@ SHOW_LEGEND = True
 ONLY_LEFT_Y_LABEL = False
 TIGHT_LAYOUT = False
 MARGIN = 0.05  # Percentage margin for ylim
+LEGEND_IDX = 1
 
 # Define consistent color settings
 VFE_COLOR = '#ff00ff'
@@ -30,17 +31,18 @@ PRAGMATIC_COLOR = '#66cdaa'
 SALIENCE_COLOR = '#00ff00'
 NOVELTY_COLOR = '#fc03d0'
 PRECISION_COLOR = '#000000'
-POLICY_ENTROPY_COLOR = '#ff0000'
+POLICY_ENTROPY_COLOR = '#1F948B'
 ACTION_COLORS = ['#03dffc', '#f70ce4', '#fcad03', '#fc03d0', '#03fcad', '#ad03fc', '#adfc03', '#fcad03', '#fc03ad', '#03adfc']
 
-label_font_size = 12  # Define a consistent font size for labels
+label_font_size = 8  # Define a consistent font size for labels
+LINEWIDTH = 0.7
 
 # Set consistent font size and style for all labels and titles
-plt.rc('font', size=12)  # Default text size
-plt.rc('axes', titlesize=14, labelsize=12)  # Axes titles and labels
-plt.rc('xtick', labelsize=10)  # X-tick labels
-plt.rc('ytick', labelsize=10)  # Y-tick labels
-plt.rc('legend', fontsize=10)  # Legend font size
+plt.rc('font', size=label_font_size)  # Default text size
+plt.rc('axes', titlesize=14, labelsize=label_font_size)  # Axes titles and labels
+plt.rc('xtick', labelsize=label_font_size)  # X-tick labels
+plt.rc('ytick', labelsize=label_font_size)  # Y-tick labels
+plt.rc('legend', fontsize=label_font_size)  # Legend font size
 plt.rc('font', family='serif')  # Use serif fonts
 plt.rc('text', usetex=False)  # Disable LaTeX rendering for simplicity (enable if needed)
 
@@ -55,7 +57,7 @@ def unstack(a, axis=0):
 def get_action_labels(num_actions):
     '''Define action labels based on the number of actions'''
     if num_actions == 2:
-        return ['u = C', 'u = D']
+        return ['$q(\hat u = \mathtt{c})$', '$q(\hat u = \mathtt{d})$']
     elif num_actions == 3:
         return ['High', 'Medium', 'Low']
     else:
@@ -91,7 +93,7 @@ def highlight_transitions(game_transitions, ax, t_min=0, t_max=None):
         ax.text(
             sum(durations[:game_idx]) + (1/2)*durations[game_idx],  # x position
             y_mid,  # y position: halfway up the y-axis
-            label, 
+            r'$\texttt{'+label+'}$', 
             color='gray', 
             alpha=0.4,
             ha='center')
@@ -141,8 +143,8 @@ def make_default_config(variables_history):
 
     # Define what plots we want to compute and show
     plot_configs = [
-        {'plot_fn': plot_precision, 
-        'args': (variables_history['gamma'],)},
+        # {'plot_fn': plot_precision, 
+        # 'args': (variables_history['gamma'],)},
         {'plot_fn': plot_vfe, 
         'args': (
             variables_history['VFE'], 
@@ -171,22 +173,22 @@ def make_default_config(variables_history):
         'args': (variables_history['q_u'], )},
         {'plot_fn': plot_policy_entropy, 
         'args': (variables_history['q_u'], )},
-        {'plot_fn': plot_inferred_policy_heatmap, 
-        'args': (variables_history['q_s'], )},
-        {'plot_fn': plot_A, 
-        'args': (variables_history['A'], )},
+        # {'plot_fn': plot_inferred_policy_heatmap, 
+        # 'args': (variables_history['q_s'], )},
+        # {'plot_fn': plot_A, 
+        # 'args': (variables_history['A'], )},
     ]
 
     return plot_configs
 
 def plot(plot_configs=None, num_players=0, 
-         suptitle='Factorised MA-AIF', game_transitions=None, figsize=(14, 22),
+         suptitle=None, game_transitions=None, figsize=(14, 22), height_ratios=None,
          t_min=0, t_max=None):
     
     # Create a figure with subplots for each agent, arranged in a (num_plots)x(num_agents) grid
     n_rows = len(plot_configs)
-    fig, axes = plt.subplots(n_rows, num_players, figsize=figsize, dpi=DPI)
-    fig.subplots_adjust(hspace=0.4, wspace=0.1)  # Adjust spacing
+    fig, axes = plt.subplots(n_rows, num_players, figsize=figsize, dpi=DPI, height_ratios=height_ratios)
+    # fig.subplots_adjust(hspace=0.4, wspace=0.1)  # Adjust spacing
 
     for row_idx in range(n_rows):
         for col_idx in range(num_players):
@@ -210,10 +212,11 @@ def plot(plot_configs=None, num_players=0,
                 ax.set_xlabel(None)
 
     # Adjust layout for better spacing and overall title
-    fig.suptitle(suptitle, fontsize=16)
-    plt.tight_layout(rect=[0, 0, 1, 0.98])  # Adjust layout to make space for the suptitle
+    if suptitle:
+        fig.suptitle(suptitle, fontsize=16)
+        plt.tight_layout(rect=[0, 0, 1, 0.98])  # Adjust layout to make space for the suptitle
     if TIGHT_LAYOUT:
-        plt.subplots_adjust(wspace=0.15, hspace=0.25)
+        plt.subplots_adjust(wspace=0.1, hspace=0.1)
     # plt.show()
 
     return fig
@@ -235,34 +238,43 @@ def plot_vfe(
 
     summed_vfe = vfe_history[t_min:t_max, i].sum(axis=1)  
     summed_energy = energy_history[t_min:t_max, i].sum(axis=1)
-    summed_complexity = complexity_history[t_min:t_max, i].sum(axis=1)
     summed_entropy = entropy_history[t_min:t_max, i].sum(axis=1)
+    summed_complexity = complexity_history[t_min:t_max, i].sum(axis=1)
     summed_accuracy = accuracy_history[t_min:t_max, i].sum(axis=1)
     
     vfe_plot = ax.plot(
         x_range, 
         summed_vfe, 
-        label='VFE', color=ELBO_COLOR, linestyle='-', linewidth=1.5)
+        label='$F[q, o]$', color=ELBO_COLOR, linestyle='-', linewidth=LINEWIDTH)
     
-    ax2 = ax.twinx()
-    complexity_plot = ax2.plot(
-        x_range, 
-        summed_complexity, 
-        label='Complexity', 
-        color=COMPLEXITY_COLOR, linestyle=':', linewidth=1.2)
+    ax2 = ax#.twinx()
+    
     energy_plot = ax2.plot(
         x_range, 
         summed_energy, 
-        label='Energy', color=ENERGY_COLOR, linestyle=':', linewidth=1.2)
-    
-    accuracy_plot = ax2.plot(
-        x_range, 
-        -summed_accuracy, 
-        label='Accuracy', color=ACCURACY_COLOR, linestyle=':', linewidth=1.2)
+        label='Energy', 
+        color=ENERGY_COLOR, 
+        linestyle=':', 
+        linewidth=LINEWIDTH,
+        alpha=0.7)
     entropy_plot = ax2.plot(
         x_range, 
         summed_entropy, 
-        label='Entropy', color=ENTROPY_COLOR, linestyle=':', linewidth=1.2)
+        label='Entropy', 
+        color=ENTROPY_COLOR, 
+        linestyle=':', 
+        linewidth=LINEWIDTH,
+        alpha=0.7)
+    
+    # complexity_plot = ax2.plot(
+    #     x_range, 
+    #     summed_complexity, 
+    #     label='Complexity', 
+    #     color=COMPLEXITY_COLOR, linestyle=':', linewidth=LINEWIDTH)
+    # accuracy_plot = ax2.plot(
+    #     x_range, 
+    #     -summed_accuracy, 
+    #     label='Accuracy', color=ACCURACY_COLOR, linestyle=':', linewidth=LINEWIDTH)
     
     ax.set_title(f'VFE Agent {chr(105+i)}', fontsize=label_font_size)
     ax.set_xlabel('Time step (t)', fontsize=label_font_size)
@@ -272,16 +284,57 @@ def plot_vfe(
     margin = MARGIN * (ymax - ymin)
     ax.set_ylim(ymin - margin, ymax + margin)
     if not ONLY_LEFT_Y_LABEL or (ONLY_LEFT_Y_LABEL and i == 0):
-        ax.set_ylabel('VFE', color='black', fontsize=label_font_size)
-        ax2.set_ylabel('Nats', fontsize=label_font_size)
-    if SHOW_LEGEND:
+        ax.set_ylabel('$F[q, o]$', color='black', fontsize=label_font_size)
+        # ax2.set_ylabel('Nats', fontsize=label_font_size)
+    if ONLY_LEFT_Y_LABEL and i > 0:
+        ax.set_yticklabels([])
+        # ax2.set_yticklabels([])
+    if SHOW_LEGEND and i == LEGEND_IDX:
         # Combine both legends in one box
-        lines = [vfe_plot[0], complexity_plot[0], energy_plot[0], accuracy_plot[0], entropy_plot[0]]
+        lines = [
+            vfe_plot[0], 
+            # complexity_plot[0], accuracy_plot[0], 
+            energy_plot[0], entropy_plot[0]
+            ]
         labels = [line.get_label() for line in lines]
-        ax.legend(lines, labels)
+        ax.legend(lines, labels, loc='lower right')
         # ax.legend(loc='upper left')
         # ax2.legend(loc='upper right')
 
+def plot_vfe_per_factor(
+        vfe_history, 
+        energy_history, complexity_history, 
+        entropy_history, accuracy_history, 
+        ax, i, 
+        t_min=0, t_max=None
+    ):
+
+    t_max = len(vfe_history) if t_max is None else t_max
+    x_range = range(t_min, t_max)
+    
+    for j in range(vfe_history.shape[-1]):
+        vfe_plot = ax.plot(
+            x_range, 
+            vfe_history[t_min:t_max, i, j], 
+            label='VFE', color=ELBO_COLOR, linestyle='-', linewidth=LINEWIDTH)
+    
+    ax.set_title(f'VFE Agent {chr(105+i)}', fontsize=label_font_size)
+    ax.set_xlabel('Time step (t)', fontsize=label_font_size)
+    # ylim range based on all agents (not just the current agent i)
+    ymin = vfe_history[t_min:t_max].min()
+    ymax = vfe_history[t_min:t_max].max()
+    margin = MARGIN * (ymax - ymin)
+    ax.set_ylim(ymin - margin, ymax + margin)
+    if not ONLY_LEFT_Y_LABEL or (ONLY_LEFT_Y_LABEL and i == 0):
+        ax.set_ylabel('VFE', color='black', fontsize=label_font_size)
+        # ax2.set_ylabel('Nats', fontsize=label_font_size)
+    if ONLY_LEFT_Y_LABEL and i > 0:
+        ax.set_yticklabels([])
+    if SHOW_LEGEND and i == LEGEND_IDX:
+        # Combine both legends in one box
+        lines = [vfe_plot[0]]
+        labels = [line.get_label() for line in lines]
+        ax.legend(lines, labels, loc='lower right')
 
 def plot_vfe_complexity_energy(vfe_history, energy_history, complexity_history, ax, i):
     summed_vfe = vfe_history[:, i].sum(axis=1)  
@@ -291,25 +344,27 @@ def plot_vfe_complexity_energy(vfe_history, energy_history, complexity_history, 
     ax.plot(
         range(len(vfe_history)), 
         summed_vfe, 
-        label='VFE', color=VFE_COLOR, linewidth=1.5)
+        label='VFE', color=VFE_COLOR, linewidth=LINEWIDTH)
     
-    ax2 = ax.twinx()
+    ax2 = ax#.twinx()
     ax2.plot(
         range(len(summed_complexity)), 
         summed_complexity, 
         label='Complexity', 
-        color=COMPLEXITY_COLOR, linestyle=':', linewidth=1.2)
+        color=COMPLEXITY_COLOR, linestyle=':', linewidth=LINEWIDTH)
     ax2.plot(
         range(len(summed_energy)), 
         summed_energy, 
-        label='Energy', color=ENERGY_COLOR, linestyle=':', linewidth=1.2)
+        label='Energy', color=ENERGY_COLOR, linestyle=':', linewidth=LINEWIDTH)
     
     ax.set_title(f'VFE Agent {chr(105+i)}', fontsize=label_font_size)
     ax.set_xlabel('Time step (t)', fontsize=label_font_size)
     if not ONLY_LEFT_Y_LABEL or (ONLY_LEFT_Y_LABEL and i == 0):
         ax.set_ylabel('VFE', color='black', fontsize=label_font_size)
         ax2.set_ylabel('Nats', fontsize=label_font_size)
-    if SHOW_LEGEND:
+    if ONLY_LEFT_Y_LABEL and i > 0:
+        ax.set_yticklabels([])
+    if SHOW_LEGEND and i == LEGEND_IDX:
         ax.legend(loc='upper left')
         ax2.legend(loc='upper right')
 
@@ -322,24 +377,26 @@ def plot_vfe_accuracy_entropy(vfe_history, entropy_history, accuracy_history, ax
     ax.plot(
         range(len(summed_vfe)), 
         summed_vfe, 
-        label='VFE', color=ELBO_COLOR, linestyle='-', linewidth=1.5)
+        label='VFE', color=ELBO_COLOR, linestyle='-', linewidth=LINEWIDTH)
     
-    ax2 = ax.twinx()
+    ax2 = ax#.twinx()
     ax2.plot(
         range(len(summed_accuracy)), 
         -summed_accuracy, 
-        label='Accuracy', color=ACCURACY_COLOR, linestyle=':', linewidth=1.2)
+        label='Accuracy', color=ACCURACY_COLOR, linestyle=':', linewidth=LINEWIDTH)
     ax2.plot(
         range(len(summed_entropy)), 
         summed_entropy, 
-        label='Entropy', color=ENTROPY_COLOR, linestyle=':', linewidth=1.2)
+        label='Entropy', color=ENTROPY_COLOR, linestyle=':', linewidth=LINEWIDTH)
     
     ax.set_title(f'VFE Agent {chr(105+i)}', fontsize=label_font_size)
     ax.set_xlabel('Time step (t)', fontsize=label_font_size)
     if not ONLY_LEFT_Y_LABEL or (ONLY_LEFT_Y_LABEL and i == 0):
         ax.set_ylabel('VFE', color='black', fontsize=label_font_size)
         ax2.set_ylabel('Nats', fontsize=label_font_size)
-    if SHOW_LEGEND:
+    if ONLY_LEFT_Y_LABEL and i > 0:
+        ax.set_yticklabels([])
+    if SHOW_LEGEND and i == LEGEND_IDX:
         ax.legend(loc='upper left')
         ax2.legend(loc='upper right')
 
@@ -364,56 +421,80 @@ def plot_efe(
     plot_EFE_terms = (not np.all(risk == 0))
 
     if plot_EFE_terms:
-        ax2 = ax.twinx()
+        ax2 = ax#.twinx()
 
     num_actions = efe_history.shape[-1]
     for a in range(num_actions):
         efe_plot = ax.plot(
             x_range, 
             efe_history[t_min:t_max, i, a], 
-            label=f'G[u={a}]',  color=ACTION_COLORS[a], linewidth=1.2)
+            label='$G[\mathtt{'+['c', 'd'][a]+'}]$',  color=ACTION_COLORS[a], linewidth=LINEWIDTH)
         
         if plot_EFE_terms:
-            risk_plot = ax2.plot(
+            # risk_plot = ax2.plot(
+            #     x_range, 
+            #     risk[t_min:t_max, i, a], 
+            #     label='$\mathcal{R}[\mathtt{'+['c', 'd'][a]+'}]$', 
+            #     color=ACTION_COLORS[a], 
+            #     linestyle=':', linewidth=LINEWIDTH, alpha=0.5)
+            # ambiguity_plot = ax2.plot(
+            #     x_range, 
+            #     ambiguity[t_min:t_max, i, a], 
+            #     label='$\mathcal{A}[\mathtt{'+['c', 'd'][a]+'}]$', 
+            #     color=ACTION_COLORS[a], 
+            #     linestyle='--', linewidth=LINEWIDTH, alpha=0.5)
+            pv_plot = ax2.plot(
                 x_range, 
-                risk[t_min:t_max, i, a], 
-                label=f'Risk[u={a}]', 
-                color=ACTION_COLORS[a], 
-                linestyle=':', linewidth=1.2, alpha=0.5)
-            ambiguity_plot = ax2.plot(
+                -pragmatic_value[t_min:t_max, i, a], 
+                label=r'$-\rho[\mathtt{'+['c', 'd'][a]+'}]$', 
+                color=ACTION_COLORS[a], linestyle=(0, (1, 5)), linewidth=LINEWIDTH, alpha=0.7)
+            salience_plot = ax2.plot(
                 x_range, 
-                ambiguity[t_min:t_max, i, a], 
-                label=f'Ambiguity[u={a}]', 
-                color=ACTION_COLORS[a], 
-                linestyle='--', linewidth=1.2, alpha=0.5)
-            # salience_plot = ax2.plot(
-            #     x_range, 
-            #     -salience[t_min:t_max, i, a], 
-            #     label=f'Salience[u={a}]', color=ACTION_COLORS[a], linestyle=':', linewidth=1.2)
-            # pv_plot = x2.plot(
-            #     x_range, 
-            #     -pragmatic_value[t_min:t_max, i, a], 
-            #     label=f'Pragmatic Value[u={a}]', color=ACTION_COLORS[a], linestyle='--', linewidth=1.2)
-            # novelty_plot = ax.plot(
-            #     x_range, 
-            #     novelty_history[t_min:t_max, i, a], 
-            #     label=f'Novelty[u={a}]', color=ACTION_COLORS[a], linestyle=':', linewidth=1.2
-            # )
+                salience[t_min:t_max, i, a], 
+                label=r'$\varsigma[\mathtt{'+['c', 'd'][a]+'}]$', 
+                color=ACTION_COLORS[a], linestyle=(0, (5, 7)), linewidth=LINEWIDTH, alpha=0.7)
+            novelty_plot = ax.plot(
+                x_range, 
+                novelty[t_min:t_max, i, a], 
+                label=r'$\eta[\mathtt{'+['c', 'd'][a]+'}]$', color=ACTION_COLORS[a], linestyle=':', linewidth=LINEWIDTH
+            )
 
     ax.set_title(f'EFE Agent {chr(105+i)}', fontsize=label_font_size)
     ax.set_xlabel('Time step (t)', fontsize=label_font_size)
     # ylim range based on all agents (not just the current agent i)
-    ymin = efe_history[t_min:t_max].min()
-    ymax = efe_history[t_min:t_max].max()
+    ymin = min(
+        efe_history[t_min:t_max].min(), 
+        risk[t_min:t_max].min(), 
+        ambiguity[t_min:t_max].min(),
+        -pragmatic_value[t_min:t_max].max(),  # negative
+        salience[t_min:t_max].min(),
+        novelty[t_min:t_max].min()
+    )
+    ymax = max(
+        efe_history[t_min:t_max].max(), 
+        risk[t_min:t_max].max(), 
+        ambiguity[t_min:t_max].max(),
+        -pragmatic_value[t_min:t_max].min(),  # negative 
+        salience[t_min:t_max].max(),
+        novelty[t_min:t_max].max()
+    )
     margin = MARGIN * (ymax - ymin)
     ax.set_ylim(ymin - margin, ymax + margin)
     if not ONLY_LEFT_Y_LABEL or (ONLY_LEFT_Y_LABEL and i == 0):
-        ax.set_ylabel('G[u]', color='black', fontsize=label_font_size)
-    if SHOW_LEGEND:
+        ax.set_ylabel('$G[\hat u]$', color='black', fontsize=label_font_size)
+    if ONLY_LEFT_Y_LABEL and i > 0:
+        ax.set_yticklabels([])
+    if SHOW_LEGEND and i == LEGEND_IDX:
         # Combine both legends in one box
-        lines = [efe_plot[0], risk_plot[0], ambiguity_plot[0]]
+        lines = [
+            efe_plot[0], 
+            # risk_plot[0], ambiguity_plot[0], 
+            pv_plot[0], 
+            salience_plot[0], 
+            novelty_plot[0]
+            ]
         labels = [line.get_label() for line in lines]
-        ax.legend(lines, labels)
+        ax.legend(lines, labels, loc='upper right')
         # ax.legend(loc='upper left')
         # ax2.legend(loc='upper right')
 
@@ -433,6 +514,7 @@ def plot_expected_efe(
     # Only plot EFE terms if they are non-zero (i.e. if actual data was provided)
     # (as a way to stub out the plotting of EFE terms)
     plot_EFE_terms = (not np.all(risk_history == 0))
+    plot_EFE_terms = False
 
     # Get EFE, Pragmatic Value, Salience, Risk, and Ambiguity over all actions
     # Calculate the dot product with q_u_history for each agent (i.e. expected value undre action dist)
@@ -455,61 +537,83 @@ def plot_expected_efe(
     summed_efe = expected_efe[t_min:t_max, i]  
     summed_risk = weighted_risk[t_min:t_max, i]
     summed_ambiguity = weighted_ambiguity[t_min:t_max, i]
-    summed_salience = -weighted_salience[t_min:t_max, i]
+    summed_salience = weighted_salience[t_min:t_max, i]
     summed_pragmatic_value = -weighted_pragmatic_value[t_min:t_max, i]
-    summed_novelty = -weighted_novelty[t_min:t_max, i]
+    summed_novelty = weighted_novelty[t_min:t_max, i]
     
     # Plot EFE on the primary y-axis
     efe_plot = ax.plot(
         x_range, 
         summed_efe, 
-        label='E[G]', color=EFE_COLOR, linewidth=1.5)
+        label=r'$\langle \boldsymbol{\mathsf{G}} \rangle$', color=EFE_COLOR, linewidth=LINEWIDTH)
     
     if plot_EFE_terms:
         # Create a secondary y-axis for Risk, Ambiguity, Salience, Pragmatic Value, and Novelty)
-        ax2 = ax.twinx()
-        risk_plot = ax2.plot(
-            x_range, 
-            summed_risk, 
-            label='Risk', color=RISK_COLOR, linestyle=':', linewidth=1.2)
-        ambiguity_plot = ax2.plot(
-            x_range, 
-            summed_ambiguity, 
-            label='Ambiguity', color=AMBIGUITY_COLOR, linestyle=':', linewidth=1.2)
-        salience_plot = ax2.plot(
-            x_range, 
-            summed_salience, 
-            label='Salience', color=SALIENCE_COLOR, linestyle=':', linewidth=1.2)
+        ax2 = ax#.twinx()
+        # risk_plot = ax2.plot(
+        #     x_range, 
+        #     summed_risk, 
+        #     label='r', color=RISK_COLOR, linestyle=':', linewidth=LINEWIDTH)
+        # ambiguity_plot = ax2.plot(
+        #     x_range, 
+        #     summed_ambiguity, 
+        #     label='a', color=AMBIGUITY_COLOR, linestyle='--', linewidth=LINEWIDTH)
         pragmatic_value_plot = ax2.plot(
             x_range, 
             summed_pragmatic_value, 
-            label='Pragmatic Value', color=PRAGMATIC_COLOR, linestyle=':', linewidth=1.2)
-        novelty_plot = ax2.plot(
+            label='$-$Pragmatic value', color=PRAGMATIC_COLOR, linestyle='--', linewidth=LINEWIDTH)
+        salience_plot = ax2.plot(
             x_range, 
-            summed_novelty, 
-            label='Novelty', color=NOVELTY_COLOR, linestyle=':', linewidth=1.2)
+            summed_salience, 
+            label='Salience', color=SALIENCE_COLOR, linestyle=':', linewidth=LINEWIDTH)
+        # novelty_plot = ax2.plot(
+        #     x_range, 
+        #     summed_novelty, 
+        #     label='Novelty', color=NOVELTY_COLOR, linestyle=':', linewidth=LINEWIDTH)
     
     # Set labels and title
     ax.set_title(f'Expected EFE Agent {chr(105+i)}', fontsize=label_font_size)
     ax.set_xlabel('Time step (t)', fontsize=label_font_size)
     # ylim range based on all agents (not just the current agent i)
-    ymin = expected_efe[t_min:t_max].min()
-    ymax = expected_efe[t_min:t_max].max()
+    ymin = min(
+        expected_efe[t_min:t_max].min(), 
+        summed_risk[t_min:t_max].min(), 
+        summed_ambiguity[t_min:t_max].min(),
+        summed_salience[t_min:t_max].min(),
+        summed_pragmatic_value[t_min:t_max].min(),
+        summed_novelty[t_min:t_max].min()
+    )
+    ymax = max(
+        expected_efe[t_min:t_max].max(), 
+        summed_risk[t_min:t_max].max(), 
+        summed_ambiguity[t_min:t_max].max(),
+        summed_salience[t_min:t_max].max(),
+        summed_pragmatic_value[t_min:t_max].max(),
+        summed_novelty[t_min:t_max].max()
+    )
     margin = MARGIN * (ymax - ymin)
     ax.set_ylim(ymin - margin, ymax + margin)
     if not ONLY_LEFT_Y_LABEL or (ONLY_LEFT_Y_LABEL and i == 0):
-        ax.set_ylabel('E[G]', color='black', fontsize=label_font_size)
+        ax.set_ylabel(r'$\langle \boldsymbol{\mathsf{G}} \rangle$', color='black', fontsize=label_font_size)
+        # if plot_EFE_terms:
+        #     ax2.set_ylabel('Nats', fontsize=label_font_size)
+    if ONLY_LEFT_Y_LABEL and i > 0:
+        ax.set_yticklabels([])
+    if SHOW_LEGEND and i == LEGEND_IDX:
         if plot_EFE_terms:
-            ax2.set_ylabel('Nats', fontsize=label_font_size)
-    if SHOW_LEGEND:
-        if plot_EFE_terms:
-            lines = [efe_plot[0], risk_plot[0], ambiguity_plot[0], salience_plot[0], pragmatic_value_plot[0], novelty_plot[0]]
+            lines = [
+                efe_plot[0], 
+                # risk_plot[0], ambiguity_plot[0], 
+                pragmatic_value_plot[0], salience_plot[0],
+                # novelty_plot[0]
+                ]
             labels = [line.get_label() for line in lines]
-            ax2.legend(lines, labels)
+            ax2.legend(lines, labels, loc='lower right')
             # ax2.legend(loc='upper right')
             # ax2.legend(loc='upper center', bbox_to_anchor=(0.5, -0.15), ncol=3)
         else:
-            ax.legend(loc='upper left')
+            pass
+            # ax.legend(loc='upper left')
 
 
 def plot_efe_risk_ambiguity(expected_efe, weighted_risk, weighted_ambiguity, ax, i):
@@ -520,24 +624,26 @@ def plot_efe_risk_ambiguity(expected_efe, weighted_risk, weighted_ambiguity, ax,
     ax.plot(
         range(len(summed_efe)), 
         summed_efe, 
-        label='EFE', color=EFE_COLOR, linewidth=1.5)
+        label='EFE', color=EFE_COLOR, linewidth=LINEWIDTH)
     
-    ax2 = ax.twinx()
+    ax2 = ax#.twinx()
     ax2.plot(
         range(len(summed_risk)), 
         summed_risk, 
-        label='Risk', color=RISK_COLOR, linestyle=':', linewidth=1.2)
+        label='Risk', color=RISK_COLOR, linestyle=':', linewidth=LINEWIDTH)
     ax2.plot(
         range(len(summed_ambiguity)), 
         summed_ambiguity, 
-        label='Ambiguity', color=AMBIGUITY_COLOR, linestyle=':', linewidth=1.2)
+        label='Ambiguity', color=AMBIGUITY_COLOR, linestyle=':', linewidth=LINEWIDTH)
     
     ax.set_title(f'EFE Agent {chr(105+i)}', fontsize=label_font_size)
     ax.set_xlabel('Time step (t)', fontsize=label_font_size)
     if not ONLY_LEFT_Y_LABEL or (ONLY_LEFT_Y_LABEL and i == 0):
         ax.set_ylabel('EFE', color='black', fontsize=label_font_size)
-        ax2.set_ylabel('Nats', fontsize=label_font_size)
-    if SHOW_LEGEND:
+        # ax2.set_ylabel('Nats', fontsize=label_font_size)
+    if ONLY_LEFT_Y_LABEL and i > 0:
+        ax.set_yticklabels([])
+    if SHOW_LEGEND and i == LEGEND_IDX:
         ax.legend(loc='upper left')
         ax2.legend(loc='upper right')
 
@@ -552,33 +658,35 @@ def plot_efe_salience_pragmatic_value(expected_efe, weighted_salience, weighted_
     ax.plot(
         range(len(summed_efe)), 
         summed_efe, 
-        label='EFE', color=EXP_ELBO_COLOR, linestyle='-', linewidth=1.5)
+        label='EFE', color=EXP_ELBO_COLOR, linestyle='-', linewidth=LINEWIDTH)
     
     # Create a secondary y-axis for Salience, Pragmatic Value, and Novelty
-    ax2 = ax.twinx()
+    ax2 = ax#.twinx()
     ax2.plot(
         range(len(summed_salience)), 
         summed_salience, 
-        label='Salience', color=SALIENCE_COLOR, linestyle=':', linewidth=1.2)
+        label='Salience', color=SALIENCE_COLOR, linestyle=':', linewidth=LINEWIDTH)
     ax2.plot(
         range(len(summed_pragmatic_value)), 
         summed_pragmatic_value, 
-        label='Pragmatic Value', color=PRAGMATIC_COLOR, linestyle=':', linewidth=1.2)
+        label='Pragmatic value', color=PRAGMATIC_COLOR, linestyle=':', linewidth=LINEWIDTH)
     
     # Plot Novelty if provided
     if summed_novelty is not None:
         ax2.plot(
             range(len(summed_novelty)), 
             summed_novelty, 
-            label='Novelty', color=NOVELTY_COLOR, linestyle=':', linewidth=1.2)
+            label='Novelty', color=NOVELTY_COLOR, linestyle=':', linewidth=LINEWIDTH)
     
     # Set labels and title
     ax.set_title(f'EFE Agent {chr(105+i)}', fontsize=label_font_size)
     ax.set_xlabel('Time step (t)', fontsize=label_font_size)
     if not ONLY_LEFT_Y_LABEL or (ONLY_LEFT_Y_LABEL and i == 0):
         ax.set_ylabel('EFE', color='black', fontsize=label_font_size)
-        ax2.set_ylabel('Nats', fontsize=label_font_size)
-    if SHOW_LEGEND:
+        # ax2.set_ylabel('Nats', fontsize=label_font_size)
+    if ONLY_LEFT_Y_LABEL and i > 0:
+        ax.set_yticklabels([])
+    if SHOW_LEGEND and i == LEGEND_IDX:
         # Set legends for both axes
         ax.legend(loc='upper left')
         ax2.legend(loc='upper right')
@@ -599,17 +707,20 @@ def plot_policy_heatmap(
         vmin=0, vmax=1,
         origin='upper', 
         aspect='auto', 
-        interpolation='nearest'
+        interpolation='nearest',
+        cmap='inferno',
     )
     
     ax.set_title(f'Policy Agent {chr(105+i)}', fontsize=label_font_size)
     ax.set_xlabel('Time step (t)', fontsize=label_font_size)
-    ax.set_xticks(range(0, t_max-t_min, int((t_max-t_min)/10)))
-    ax.set_xticklabels(range(t_min, t_max, int((t_max-t_min)/10)))
+    ax.set_xticks(range(0, t_max-t_min, int((t_max-t_min)/5)))
+    ax.set_xticklabels(range(t_min, t_max, int((t_max-t_min)/5)))
     ax.set_yticks(range(len(action_labels)))
     ax.set_yticklabels(action_labels)
-    if not ONLY_LEFT_Y_LABEL or (ONLY_LEFT_Y_LABEL and i == 0):
-        ax.set_ylabel('q(u)', fontsize=label_font_size)
+    # if not ONLY_LEFT_Y_LABEL or (ONLY_LEFT_Y_LABEL and i == 0):
+    #     ax.set_ylabel('$q(\hat u)$', fontsize=label_font_size)
+    if ONLY_LEFT_Y_LABEL and i > 0:
+        ax.set_yticklabels([])
 
 
 def plot_policy_entropy(
@@ -627,17 +738,18 @@ def plot_policy_entropy(
     ax.plot(
         x_range,
         entropy, 
-        label='Policy entropy', color=POLICY_ENTROPY_COLOR, linewidth=1.5
+        label='Policy entropy', color=POLICY_ENTROPY_COLOR, linewidth=LINEWIDTH
     )
     max_ent = np.log(q_pi_history.shape[-1])
-    ax.hlines(max_ent, t_min, t_max, color='#ccc', linestyle='--', linewidth=1., label='Max entropy')
+    ax.hlines(max_ent, t_min, t_max, color='#ccc', linestyle='--', linewidth=LINEWIDTH, label='Max entropy')
     
     ax.set_title(f'Policy entropy Agent {chr(105+i)}', fontsize=label_font_size)
     ax.set_xlabel('Time step (t)', fontsize=label_font_size)
     ax.set_ylim(-0.1, max_ent+0.1)
     if not ONLY_LEFT_Y_LABEL or (ONLY_LEFT_Y_LABEL and i == 0):
-        ax.set_ylabel('H[q(u)]', fontsize=label_font_size)
-
+        ax.set_ylabel('$H[q(\hat u)]$', fontsize=label_font_size)
+    if ONLY_LEFT_Y_LABEL and i > 0:
+        ax.set_yticklabels([])
 
 def plot_inferred_policy_heatmap(
         s_history, 
@@ -655,7 +767,8 @@ def plot_inferred_policy_heatmap(
         vmin=0, vmax=1,
         origin='upper', 
         aspect='auto', 
-        interpolation='nearest'
+        interpolation='nearest',
+        cmap='inferno',
     )
     
     ax.set_title(f'Agent {chr(105+i)}\'s inferred hidden state (each factor)', fontsize=label_font_size)
@@ -665,7 +778,9 @@ def plot_inferred_policy_heatmap(
     ax.set_yticks(range(num_actions*num_players))
     ax.set_yticklabels(action_labels * num_players)
     if not ONLY_LEFT_Y_LABEL or (ONLY_LEFT_Y_LABEL and i == 0):
-        ax.set_ylabel('q(s)', fontsize=label_font_size)
+        ax.set_ylabel('$q(s)$', fontsize=label_font_size)
+    if ONLY_LEFT_Y_LABEL and i > 0:
+        ax.set_yticklabels([])
 
 # def plot_log_C_modality(log_C_modality_history, ax, i, t_max=None, max_legend_items=9):
 
@@ -709,14 +824,14 @@ def plot_inferred_policy_heatmap(
 #             range(t_max), 
 #             log_C_values[:, j], 
 #             label=str(current_action.tolist()),
-#             linewidth=1.2
+#             linewidth=LINEWIDTH
 #         )
     
 #     ax.set_title(f'Learnt Preferences for Agent {chr(105+i)}', fontsize=label_font_size)
 #     ax.set_xlabel('Time step (t)', fontsize=label_font_size)
 #     if not ONLY_LEFT_Y_LABEL or (ONLY_LEFT_Y_LABEL and i == 0):
 #         ax.set_ylabel('log C (opponent)', fontsize=label_font_size)
-#     if SHOW_LEGEND:
+#     if SHOW_LEGEND and i == LEGEND_IDX:
 #         ax.legend(title='Joint actions', fontsize=8, loc='upper right')
 
 
@@ -750,7 +865,7 @@ def plot_utility(log_C_opp_history, ax, i, t_max=None, num_samples=1000, epsilon
             utility_mean[:, j], 
             label=str(current_action.tolist()),
             color=f'C{j % 10}', 
-            linewidth=1.2
+            linewidth=LINEWIDTH
         )
         ax.fill_between(
             range(t_max), 
@@ -764,7 +879,7 @@ def plot_utility(log_C_opp_history, ax, i, t_max=None, num_samples=1000, epsilon
     ax.set_xlabel('Time step (t)', fontsize=label_font_size)
     if not ONLY_LEFT_Y_LABEL or (ONLY_LEFT_Y_LABEL and i == 0):
         ax.set_ylabel('Reward (log prob)', fontsize=label_font_size)
-    if SHOW_LEGEND:
+    if SHOW_LEGEND and i == LEGEND_IDX:
         ax.legend(title='Joint actions', fontsize=8, loc='upper right')
 
 
@@ -778,7 +893,7 @@ def plot_precision(
     ax.plot(
         x_range, 
         gamma_history[t_min:t_max, i], 
-        label='Precision', color=PRECISION_COLOR, linewidth=1.5
+        label='Precision', color=PRECISION_COLOR, linewidth=LINEWIDTH
     )
     
     ax.set_title(f'Precision for Agent {chr(105+i)}', fontsize=label_font_size)
@@ -790,6 +905,8 @@ def plot_precision(
     ax.set_ylim(ymin - margin, ymax + margin)
     if not ONLY_LEFT_Y_LABEL or (ONLY_LEFT_Y_LABEL and i == 0):
         ax.set_ylabel('Precision', fontsize=label_font_size)
+    if ONLY_LEFT_Y_LABEL and i > 0:
+        ax.set_yticklabels([])
 
 
 def plot_A(A_history, ax, i, 
@@ -802,10 +919,11 @@ def plot_A(A_history, ax, i,
     num_actions = A_history.shape[-1]
     cax = ax.imshow(
         A_history[t_min:t_max, i].reshape(-1, num_players*num_actions*num_actions).T,
-        # vmin=0, vmax=1,
+        vmin=0, vmax=1,
         origin='upper', 
         aspect='auto', 
-        interpolation='nearest'
+        interpolation='nearest',
+        cmap='inferno',
     )
     labels = [f'[{chr(105+j)}, {o}, {s}]' 
               for j in range(num_players) 
@@ -820,6 +938,47 @@ def plot_A(A_history, ax, i,
     ax.set_yticklabels(labels)
     if not ONLY_LEFT_Y_LABEL or (ONLY_LEFT_Y_LABEL and i == 0):
         ax.set_ylabel('A', fontsize=label_font_size)
+    if ONLY_LEFT_Y_LABEL and i > 0:
+        ax.set_yticklabels([])
+
+
+def plot_B(B_history, i, t_min=0, t_max=None):
+
+    t_max = B_history.shape[0] if t_max is None else t_max
+    num_players = B_history.shape[1]
+    num_actions = B_history.shape[-1]
+
+    labels = ['['+chr(105+j)+r', $\mathtt{'+['c', 'd'][u]+'}$, '+f'{s}, {s_}]' 
+        for j in range(num_players)
+        for u in range(num_actions)
+        for s_ in range(num_actions) 
+        for s in range(num_actions)]
+
+    data = B_history[t_min:t_max, i, :, :].reshape((t_max - t_min), -1).T
+
+    plt.figure(figsize=(4, 3))
+    ax = plt.gca()
+    cax = ax.imshow(
+        data,
+        vmin=0, vmax=1,
+        origin='upper', 
+        aspect='auto', 
+        interpolation='nearest',
+        cmap='inferno',
+    )
+
+    # ax.set_title(r'$\boldsymbol{\mathsf{B}}_{'+str(i+1)+'}$', fontsize=label_font_size)
+    ax.set_title(f'Transition model Agent {i+1}', fontsize=label_font_size)
+    ax.set_xlabel('Time step (t)', fontsize=label_font_size)
+    ax.set_xticks(range(0, t_max-t_min, int((t_max-t_min)/10)))
+    ax.set_xticklabels(range(t_min, t_max, int((t_max-t_min)/10)))
+    ax.set_yticks(range(len(labels)))
+    ax.set_yticklabels(labels)
+    if not ONLY_LEFT_Y_LABEL or (ONLY_LEFT_Y_LABEL and i == 0):
+        ax.set_ylabel(r'$\boldsymbol{\mathsf{B}}$', fontsize=label_font_size)
+
+    plt.show()
+
 
 
 # ==============================================================================
@@ -837,32 +996,31 @@ def plot_vfe_ensemble(vfe_history, energy_history, complexity_history, entropy_h
     ax.plot(
         range(len(summed_vfe)), 
         summed_vfe, 
-        label='VFE', color=ELBO_COLOR, linestyle='-', linewidth=1.5)
+        label='VFE', color=ELBO_COLOR, linestyle='-', linewidth=LINEWIDTH)
     
-    ax2 = ax.twinx()
+    ax2 = ax#.twinx()
+    ax2.plot(
+        range(len(summed_energy)), 
+        summed_energy, 
+        label='Energy', color=ENERGY_COLOR, linestyle=':', linewidth=LINEWIDTH)
+    ax2.plot(
+        range(len(summed_entropy)), 
+        summed_entropy, 
+        label='Entropy', color=ENTROPY_COLOR, linestyle=':', linewidth=LINEWIDTH)
     ax2.plot(
         range(len(summed_complexity)), 
         summed_complexity, 
         label='Complexity', 
-        color=COMPLEXITY_COLOR, linestyle=':', linewidth=1.2)
-    ax2.plot(
-        range(len(summed_energy)), 
-        summed_energy, 
-        label='Energy', color=ENERGY_COLOR, linestyle=':', linewidth=1.2)
-    
+        color=COMPLEXITY_COLOR, linestyle=':', linewidth=LINEWIDTH)
     ax2.plot(
         range(len(summed_accuracy)), 
         -summed_accuracy, 
-        label='Accuracy', color=ACCURACY_COLOR, linestyle=':', linewidth=1.2)
-    ax2.plot(
-        range(len(summed_entropy)), 
-        summed_entropy, 
-        label='Entropy', color=ENTROPY_COLOR, linestyle=':', linewidth=1.2)
+        label='Accuracy', color=ACCURACY_COLOR, linestyle=':', linewidth=LINEWIDTH)
     
     ax.set_title(f'VFE Ensemble ({vfe_history.shape[1]} agents)', fontsize=label_font_size)
     ax.set_xlabel('Time step (t)', fontsize=label_font_size)
     ax.set_ylabel('VFE', color='black', fontsize=label_font_size)
-    ax2.set_ylabel('Nats', fontsize=label_font_size)
+    # ax2.set_ylabel('Nats', fontsize=label_font_size)
     if SHOW_LEGEND:
         ax.legend(loc='upper left')
         ax2.legend(loc='upper right')
@@ -906,39 +1064,39 @@ def plot_expected_efe_ensemble(
     ax.plot(
         range(len(summed_efe)), 
         summed_efe, 
-        label='E[G]', color=EFE_COLOR, linewidth=1.5)
+        label=r'$\langle \boldsymbol{\mathsf{G}} \rangle$', color=EFE_COLOR, linewidth=LINEWIDTH)
     
     # Create a secondary y-axis for Risk, Ambiguity, Salience, Pragmatic Value, and Novelty
-    ax2 = ax.twinx()
+    ax2 = ax#.twinx()
     ax2.plot(
         range(len(summed_risk)), 
         summed_risk, 
-        label='Risk', color=RISK_COLOR, linestyle=':', linewidth=1.2)
+        label='Risk', color=RISK_COLOR, linestyle=':', linewidth=LINEWIDTH)
     ax2.plot(
         range(len(summed_ambiguity)), 
         summed_ambiguity, 
-        label='Ambiguity', color=AMBIGUITY_COLOR, linestyle=':', linewidth=1.2)
+        label='Ambiguity', color=AMBIGUITY_COLOR, linestyle=':', linewidth=LINEWIDTH)
     ax2.plot(
         range(len(summed_salience)), 
         summed_salience, 
-        label='Salience', color=SALIENCE_COLOR, linestyle=':', linewidth=1.2)
+        label='Salience', color=SALIENCE_COLOR, linestyle=':', linewidth=LINEWIDTH)
     ax2.plot(
         range(len(summed_pragmatic_value)), 
         summed_pragmatic_value, 
-        label='Pragmatic Value', color=PRAGMATIC_COLOR, linestyle=':', linewidth=1.2)
+        label='Pragmatic Value', color=PRAGMATIC_COLOR, linestyle=':', linewidth=LINEWIDTH)
     
     # Plot Novelty if provided
     if summed_novelty is not None:
         ax2.plot(
             range(len(summed_novelty)), 
             summed_novelty, 
-            label='Novelty', color=NOVELTY_COLOR, linestyle=':', linewidth=1.2)
+            label='Novelty', color=NOVELTY_COLOR, linestyle=':', linewidth=LINEWIDTH)
     
     # Set labels and title
     ax.set_title(f'Expected EFE of Ensemble ({q_u_history.shape[1]} agents)', fontsize=label_font_size)
     ax.set_xlabel('Time step (t)', fontsize=label_font_size)
-    ax.set_ylabel('E[G]', color='black', fontsize=label_font_size)
-    ax2.set_ylabel('Nats', fontsize=label_font_size)
+    ax.set_ylabel(r'\langle \boldsymbol{\mathsf{G}} \rangle', color='black', fontsize=label_font_size)
+    # ax2.set_ylabel('Nats', fontsize=label_font_size)
     if SHOW_LEGEND:
         ax.legend(loc='upper left')
         ax2.legend(loc='upper right')
@@ -1186,7 +1344,7 @@ def plot_ensemble_policies(q_u_hist, game_transitions, ax=None):
     ax.vlines(
         [t_bifurcation, t_steady], 
         0, 1, 
-        linestyle='--', linewidth=1, color='red', alpha=0.4,)
+        linestyle='--', linewidth=LINEWIDTH, color='red', alpha=0.4,)
     
     ax.set_xlabel('Time step')
     ax.set_ylabel('q(u=c)')
@@ -1246,7 +1404,7 @@ def plot_reference_hull(
 
     # Plot each edge as a line segment
     for edge in edge_lines:
-        ax.plot(*zip(*edge), color="k", linewidth=1, zorder=2)
+        ax.plot(*zip(*edge), color="k", linewidth=LINEWIDTH, zorder=2)
 
     # Plot the corners of the cube
     CORNER_MARKER = '^'
@@ -1284,7 +1442,7 @@ def plot_trajectory_flat(trajectory):
     trajectory_kwargs = dict(
         alpha=0.6,
         marker='o',
-        linewidth=1,
+        linewidth=LINEWIDTH,
     )
 
     fig, (ax1, ax2) = plt.subplots(

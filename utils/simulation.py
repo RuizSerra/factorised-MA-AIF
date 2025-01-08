@@ -20,6 +20,8 @@ import utils.database
 
 logging.basicConfig(level=logging.INFO)
 
+TRANSITION_DURATION = 10
+
 def run_single_simulation(game_transitions, agent_kwargs, T, seed):
     
     # Initialisation -------------------------------------------------------
@@ -86,34 +88,45 @@ def simulate_parallel(
         )
         
     # Experiment repeats (parallel execution) ----------------------------------
-    experiment_results = []
     seeds = np.random.choice(500, num_repeats, replace=False).tolist()
+    BATCH_SIZE = 10
+    num_batches = np.ceil(num_repeats / BATCH_SIZE).astype(int)
 
-    with concurrent.futures.ProcessPoolExecutor() as executor:
-        futures = [
-            executor.submit(
-                run_single_simulation, 
-                game_transitions, agent_kwargs, T, seeds[repeat_idx]
-            ) for repeat_idx in range(num_repeats)
-        ]
-        
-        for future in concurrent.futures.as_completed(futures):
-            experiment_results.append(future.result())
+    for batch_idx in range(num_batches):
+        logging.info(f'Batch {batch_idx+1}/{num_batches}')
+        start_idx = batch_idx * BATCH_SIZE
+        end_idx = min((batch_idx+1) * BATCH_SIZE, num_repeats)
 
-    # Write results to the database in the main process ------------------------
-    if results_db_path is not None:
-        for result in experiment_results:
-            seed, variables_history = result
-            utils.database.store_timeseries(
-                commit_sha, 
-                timestamp, 
-                seed, 
-                variables_history, 
-                results_db_path
-            )
+        experiment_results = []
+        with concurrent.futures.ProcessPoolExecutor() as executor:
+            futures = [
+                executor.submit(
+                    run_single_simulation, 
+                    game_transitions, agent_kwargs, T, seeds[repeat_idx]
+                ) for repeat_idx in range(start_idx, end_idx)
+            ]
+            
+            for future in concurrent.futures.as_completed(futures):
+                experiment_results.append(future.result())
 
-        logging.info(f'Stored results for {num_repeats} simulations in database: {results_db_path}')
-        logging.info(f'Experiment ID: {commit_sha} {timestamp}')
+        # Write results to the database in the main process ------------------------
+        if results_db_path is not None:
+            for result in experiment_results:
+                seed, variables_history = result
+                utils.database.store_timeseries(
+                    commit_sha, 
+                    timestamp, 
+                    seed, 
+                    variables_history, 
+                    results_db_path
+                )
+
+            logging.info(f'Stored results for {BATCH_SIZE} simulations in database: {results_db_path}')
+            logging.info(f'Experiment ID: {commit_sha} {timestamp}')
+    
+    if num_batches > 1:
+        logging.warning(('This function only returns the last batch of results. '
+                         'Use the database to access all results.'))
     return experiment_results
 
 def simulate(
@@ -228,7 +241,7 @@ class IteratedGame:
 
     def run(self, 
             T:int, 
-            transition_duration:int=200, 
+            transition_duration:int=TRANSITION_DURATION, 
             collect_variables:list=[
                 'VFE', 
                 'energy', 
@@ -269,7 +282,7 @@ class IteratedGame:
         for t in range(T):
 
             # # Print summary for each agent -------------------------------------------
-            if t % 50 == 0:
+            if t % 200 == 0:
                 logging.info(f't={t}/{T}')
                 logging.debug('')
                 for agent in self.agents:
