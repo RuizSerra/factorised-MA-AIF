@@ -17,7 +17,7 @@ sys.path.append('../')
 from games import *
 import utils.simulation
 
-GAME_DURATION = 500
+GAME_DURATION = 2000
 
 if __name__ == '__main__':
 
@@ -167,27 +167,36 @@ if __name__ == '__main__':
         # [   
         #     ('Ch', chicken_2player, GAME_DURATION),
         # ],
-        [   
-            ('Ch', chicken_2player, GAME_DURATION),
-            ('SH', stag_hunt_2player, GAME_DURATION+1),
+        # [   
+        #     ('Ch', chicken_2player, GAME_DURATION),
+        #     ('SH', stag_hunt_2player, GAME_DURATION+1),
+        # ],
+        # [   
+        #     ('Ch', chicken_3player, GAME_DURATION),
+        #     ('SH-g', stag_hunt_3player_green, GAME_DURATION+1),
+        # ],
+        # [   
+        #     ('Ch', chicken_3player, GAME_DURATION),
+        #     ('SH-r', stag_hunt_3player_red, GAME_DURATION+1),
+        # ],
+        # [   
+        #     ('Ch', chicken_3player, GAME_DURATION),
+        #     ('SH-p', stag_hunt_3player_penalty, GAME_DURATION+1),
+        # ],
+        # [   
+        #     ('Ch', chicken_3player, GAME_DURATION),
+        #     ('SH-g', stag_hunt_3player_green, GAME_DURATION//2),
+        #     ('SH-r', stag_hunt_3player_red, GAME_DURATION//2+1),
+        # ],
+        [    
+            ('SH3x4', stag_hunt_3x4, GAME_DURATION),
         ],
-        [   
-            ('Ch', chicken_3player, GAME_DURATION),
-            ('SH-g', stag_hunt_3player_green, GAME_DURATION+1),
+        [
+            ('Ch3x4', chicken_3x4, GAME_DURATION),
         ],
-        [   
-            ('Ch', chicken_3player, GAME_DURATION),
-            ('SH-r', stag_hunt_3player_red, GAME_DURATION+1),
-        ],
-        [   
-            ('Ch', chicken_3player, GAME_DURATION),
-            ('SH-p', stag_hunt_3player_penalty, GAME_DURATION+1),
-        ],
-        [   
-            ('Ch', chicken_3player, GAME_DURATION),
-            ('SH-g', stag_hunt_3player_green, GAME_DURATION//2),
-            ('SH-r', stag_hunt_3player_red, GAME_DURATION//2+1),
-        ],
+        [
+            ('PD3x4', prisoners_dilemma_3x4, GAME_DURATION),
+        ]
     ]
 
     # Run simulations --------------------------------------------------------------

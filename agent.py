@@ -58,7 +58,7 @@ class Agent:
             learning_offset:int=6,
             decay:float=0.5,
             A_BMR:Union[str, None]='identity',
-            B_BMR:Union[str, None]='identity',
+            B_BMR:Union[str, None]='softmax',
         ):
         '''Initialise an agent with the following parameters
         

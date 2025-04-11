@@ -32,7 +32,7 @@ SALIENCE_COLOR = '#00ff00'
 NOVELTY_COLOR = '#fc03d0'
 PRECISION_COLOR = '#000000'
 POLICY_ENTROPY_COLOR = '#1F948B'
-ACTION_COLORS = ['#03dffc', '#f70ce4', '#fcad03', '#fc03d0', '#03fcad', '#ad03fc', '#adfc03', '#fcad03', '#fc03ad', '#03adfc']
+ACTION_COLORS = ['#03dffc', '#f70ce4', '#fcad03', '#80eb34', '#fc03d0', '#03fcad', '#ad03fc', '#adfc03', '#fcad03', '#fc03ad', '#03adfc']
 
 label_font_size = 8  # Define a consistent font size for labels
 LINEWIDTH = 0.7
@@ -93,7 +93,7 @@ def highlight_transitions(game_transitions, ax, t_min=0, t_max=None):
         ax.text(
             sum(durations[:game_idx]) + (1/2)*durations[game_idx],  # x position
             y_mid,  # y position: halfway up the y-axis
-            r'$\texttt{'+label+'}$', 
+            r'$\mathtt{'+label+'}$', 
             color='gray', 
             alpha=0.4,
             ha='center')
@@ -428,35 +428,35 @@ def plot_efe(
         efe_plot = ax.plot(
             x_range, 
             efe_history[t_min:t_max, i, a], 
-            label='$G[\mathtt{'+['c', 'd'][a]+'}]$',  color=ACTION_COLORS[a], linewidth=LINEWIDTH)
+            label='$G[\mathtt{'+str(a)+'}]$',  color=ACTION_COLORS[a], linewidth=LINEWIDTH)
         
         if plot_EFE_terms:
             # risk_plot = ax2.plot(
             #     x_range, 
             #     risk[t_min:t_max, i, a], 
-            #     label='$\mathcal{R}[\mathtt{'+['c', 'd'][a]+'}]$', 
+            #     label='$\mathcal{R}[\mathtt{'+str(a)+'}]$', 
             #     color=ACTION_COLORS[a], 
             #     linestyle=':', linewidth=LINEWIDTH, alpha=0.5)
             # ambiguity_plot = ax2.plot(
             #     x_range, 
             #     ambiguity[t_min:t_max, i, a], 
-            #     label='$\mathcal{A}[\mathtt{'+['c', 'd'][a]+'}]$', 
+            #     label='$\mathcal{A}[\mathtt{'+str(a)+'}]$', 
             #     color=ACTION_COLORS[a], 
             #     linestyle='--', linewidth=LINEWIDTH, alpha=0.5)
             pv_plot = ax2.plot(
                 x_range, 
                 -pragmatic_value[t_min:t_max, i, a], 
-                label=r'$-\rho[\mathtt{'+['c', 'd'][a]+'}]$', 
+                label=r'$-\rho[\mathtt{'+str(a)+'}]$', 
                 color=ACTION_COLORS[a], linestyle=(0, (1, 5)), linewidth=LINEWIDTH, alpha=0.7)
             salience_plot = ax2.plot(
                 x_range, 
                 salience[t_min:t_max, i, a], 
-                label=r'$\varsigma[\mathtt{'+['c', 'd'][a]+'}]$', 
+                label=r'$\varsigma[\mathtt{'+str(a)+'}]$', 
                 color=ACTION_COLORS[a], linestyle=(0, (5, 7)), linewidth=LINEWIDTH, alpha=0.7)
             novelty_plot = ax.plot(
                 x_range, 
                 novelty[t_min:t_max, i, a], 
-                label=r'$\eta[\mathtt{'+['c', 'd'][a]+'}]$', color=ACTION_COLORS[a], linestyle=':', linewidth=LINEWIDTH
+                label=r'$\eta[\mathtt{'+str(a)+'}]$', color=ACTION_COLORS[a], linestyle=':', linewidth=LINEWIDTH
             )
 
     ax.set_title(f'EFE Agent {chr(105+i)}', fontsize=label_font_size)

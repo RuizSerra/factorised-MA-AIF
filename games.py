@@ -324,6 +324,95 @@ rockpaperscissors_3player = torch.tensor([
      [ 0, -1,  1]]]) + 2
 
 # ==============================================================================
+# 3 Player, 4 action games
+# ==============================================================================
+
+T, R, P, S = 4., 3.1, 2., 1.  # R > (T+S)/2  http://gamut.stanford.edu/gamut.pdf
+prisoners_dilemma_3x4 = torch.tensor([
+    [   # u_k = CC
+        [R+R, R+R, S+R, S+R],   # u_i = CC
+        [R+T, R+T, S+T, S+T],   # u_i = CD
+        [T+R, T+R, P+R, P+R],   # u_i = DC
+        [T+T, T+T, P+T, P+T],   # u_i = DD
+    ],
+    [   # u_k = CD
+        [R+R, R+R, S+R, S+R],   # u_i = CC
+        [R+T, R+T, S+T, S+T],   # u_i = CD
+        [T+R, T+R, P+R, P+R],   # u_i = DC
+        [T+T, T+T, P+T, P+T],   # u_i = DD
+    ],
+    [   # u_k = DC
+        [R+S, R+S, S+S, S+S],   # u_i = CC
+        [R+P, R+P, S+P, S+P],   # u_i = CD
+        [T+S, T+S, P+S, P+S],   # u_i = DC
+        [T+P, T+P, P+P, P+P],   # u_i = DD
+    ],
+    [   # u_k = DD
+        [R+S, R+S, S+S, S+S],   # u_i = CC
+        [R+P, R+P, S+P, S+P],   # u_i = CD
+        [T+S, T+S, P+S, P+S],   # u_i = DC
+        [T+P, T+P, P+P, P+P],   # u_i = DD
+    ],
+]).swapaxes(0, 1)
+
+T, R, S, P = 4., 3., 2., 1.
+chicken_3x4 = torch.tensor([
+    [   # u_k = CC
+        [R+R, R+R, S+R, S+R],   # u_i = CC
+        [R+T, R+T, S+T, S+T],   # u_i = CD
+        [T+R, T+R, P+R, P+R],   # u_i = DC
+        [T+T, T+T, P+T, P+T],   # u_i = DD
+    ],
+    [   # u_k = CD
+        [R+R, R+R, S+R, S+R],   # u_i = CC
+        [R+T, R+T, S+T, S+T],   # u_i = CD
+        [T+R, T+R, P+R, P+R],   # u_i = DC
+        [T+T, T+T, P+T, P+T],   # u_i = DD
+    ],
+    [   # u_k = DC
+        [R+S, R+S, S+S, S+S],   # u_i = CC
+        [R+P, R+P, S+P, S+P],   # u_i = CD
+        [T+S, T+S, P+S, P+S],   # u_i = DC
+        [T+P, T+P, P+P, P+P],   # u_i = DD
+    ],
+    [   # u_k = DD
+        [R+S, R+S, S+S, S+S],   # u_i = CC
+        [R+P, R+P, S+P, S+P],   # u_i = CD
+        [T+S, T+S, P+S, P+S],   # u_i = DC
+        [T+P, T+P, P+P, P+P],   # u_i = DD
+    ],
+]).swapaxes(0, 1)
+
+R, T, P, S = 4., 3., 2., 1.
+stag_hunt_3x4 = torch.tensor([
+    [   # u_k = CC
+        [R+R, R+R, S+R, S+R],   # u_i = CC
+        [R+T, R+T, S+T, S+T],   # u_i = CD
+        [T+R, T+R, P+R, P+R],   # u_i = DC
+        [T+T, T+T, P+T, P+T],   # u_i = DD
+    ],
+    [   # u_k = CD
+        [R+R, R+R, S+R, S+R],   # u_i = CC
+        [R+T, R+T, S+T, S+T],   # u_i = CD
+        [T+R, T+R, P+R, P+R],   # u_i = DC
+        [T+T, T+T, P+T, P+T],   # u_i = DD
+    ],
+    [   # u_k = DC
+        [R+S, R+S, S+S, S+S],   # u_i = CC
+        [R+P, R+P, S+P, S+P],   # u_i = CD
+        [T+S, T+S, P+S, P+S],   # u_i = DC
+        [T+P, T+P, P+P, P+P],   # u_i = DD
+    ],
+    [   # u_k = DD
+        [R+S, R+S, S+S, S+S],   # u_i = CC
+        [R+P, R+P, S+P, S+P],   # u_i = CD
+        [T+S, T+S, P+S, P+S],   # u_i = DC
+        [T+P, T+P, P+P, P+P],   # u_i = DD
+    ],
+]).swapaxes(0, 1)
+
+
+# ==============================================================================
 # 4 Player, 2 action games
 # ==============================================================================
 
