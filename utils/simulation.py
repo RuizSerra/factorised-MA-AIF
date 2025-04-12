@@ -353,6 +353,127 @@ class IteratedGame:
         return variables_history
 
 
+class IteratedNetworkGame:
+    
+    def __init__(
+            self, 
+            agents,
+            network,
+            seed=None):
+        '''
+        Initialize the simulation
+        
+        Args:
+            agents (list) List of agents
+            network (networkx) NetworkX graph representing the network
+            seed (int or None) Seed for random number generators
+        '''
+        
+        self.agents = agents
+        self.network = network
+        self.num_players = len(agents)
+        self.num_actions = 2
+
+        # Seeds ----------------------------------------------------------------
+        seed = np.random.randint(0, 100) if seed is None else seed
+        self.seed = seed
+        random.seed(seed)         # Set seed for Python's random module
+        np.random.seed(seed)      # Set seed for NumPy
+        torch.manual_seed(seed)   # Set seeds for PyTorch
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+        torch.backends.cudnn.deterministic = True  # For reproducibility in PyTorch (especially on CUDA)
+        torch.backends.cudnn.benchmark = False
+
+    def run(self, 
+            T:int, 
+            collect_variables:list=[
+                # 'VFE', 
+                # 'energy', 
+                # 'entropy', 
+                # 'accuracy', 
+                # 'complexity', 
+                # 'EFE', 
+                # 'EFE_terms',
+                # 'gamma',
+                # 'q_s',
+                'q_u', 
+                'u', 
+                # 'A', 
+                # 'B',
+                # 'payoff',
+            ]
+        ):
+        '''
+        Run the simulation for T time steps
+
+        Args:
+            T (int) Total number of time steps
+
+        Returns:
+            variables_history (dict) History of variables for each agent
+        '''
+
+        # Initialize history variables for data collection
+        variables_history = {v: [] for v in collect_variables}
+
+        # Run simulation ---------------------------------------------------------------
+        logging.info(f'Simulation started with seed {self.seed}')
+        logging.info(f't=0/{T}')
+        for t in range(T):
+
+            # # Print summary for each agent -------------------------------------------
+            if t % 200 == 0:
+                logging.info(f't={t}/{T}')
+                logging.debug('')
+                for agent in self.agents:
+                    logging.debug(agent)
+                    logging.debug("-" * 40)  
+            
+            # Iterated game logic ------------------------------------------------------
+            # Select actions for all agents
+            u_all = [agent.select_action() for agent in self.agents]
+            u_all_one_hot = F.one_hot(torch.tensor(u_all), self.num_actions).to(torch.float)  # Convert actions to one-hot encoding
+
+            # Each agent infers the state based on their observation 
+            for agent in self.agents:
+                # Get neighbors of the agent in the network
+                neighbours = list(self.network.neighbors(agent.id))  # TODO: can we guarantee the order of the neighbors?
+                # TODO? neighbours = [n for n in neighbours if n != agent.id]  # Remove self from neighbors
+                # Egocentric observation
+                o_ego = u_all_one_hot[agent.id].unsqueeze(0)  # Shape (1, n_actions)
+                o_neighbours = u_all_one_hot[neighbours]  # Shape (n_neighbors, n_actions)
+                # o_rest = torch.cat((u_all_one_hot[:agent.id], u_all_one_hot[agent.id+1:]), dim=0)  # Shape (n_agents-1, n_actions)
+                o = torch.cat((o_ego, o_neighbours), dim=0)  # Shape (n_neighbors+1, n_actions)
+
+                # Compute payoffs
+                # agent.payoff = agent.log_C[
+                #     tuple([torch.argmax(o_i).item() for o_i in o])  # Indexing the game matrix
+                # ]  # Payoff for the selected actions
+                
+                agent.infer_state(o)
+
+                agent.learn()  # Update the agent's model (only does so every agent.learn_every_t_steps steps)
+
+            # Data collection ----------------------------------------------------------
+            for varname in variables_history.keys():
+                if isinstance(getattr(self.agents[0], varname), list):
+                    variables_history[varname].append([
+                        [_ for _ in getattr(a, varname)] for a in self.agents  # Deep copy for lists
+                    ])
+                elif isinstance(getattr(self.agents[0], varname), torch.Tensor):
+                    variables_history[varname].append([
+                        getattr(a, varname).clone().detach() for a in self.agents  # Deep copy for tensors
+                    ])
+                else:
+                    variables_history[varname].append([
+                        getattr(a, varname) for a in self.agents  # Copy for other types
+                    ])
+
+        logging.info(f't={t+1}/{T} Simulation complete')  # hehe
+        return variables_history
+
+
 if __name__ == '__main__':
 
     from games import prisoners_dilemma_2player
