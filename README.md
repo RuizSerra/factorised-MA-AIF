@@ -13,8 +13,9 @@ Factorised Active Inference Agents for Strategic Multi-Agent Interactions
     - `01 INFG 2x2.ipynb`: Jupyter notebook with simulation and plotting of iterated normal-form games (2-player, 2-action)
     - `01 INFG 3x2.ipynb`: Jupyter notebook with simulation and plotting of iterated normal-form games (3-player, 2-action)
     - `99 FAQ.ipynb`: Additional notebook with some explanations and examples
-2. [`docs/schematic-diagram.png`](./docs/schematic-diagram.png): (Ontological) diagram of the factorised active inference agent (in time)
-3. [`docs/computational-graph.png`](./docs/computational-graph.png): Computational graph of the factorised active inference agent (what goes on under the hood)
+2. [Poster](./docs/AAMAS-2025-poster.pdf) and [presentation](./docs/AAMAS-2025-presentation.pdf) for AAMAS 2025, summarising the main results of the paper
+3. [`docs/schematic-diagram.png`](./docs/schematic-diagram.png): (Ontological) diagram of the factorised active inference agent (in time)
+4. [`docs/computational-graph.png`](./docs/computational-graph.png): Computational graph of the factorised active inference agent (what goes on under the hood)
 
 ## Codebase structure
 
