@@ -11,6 +11,9 @@ import numpy as np
 import torch.nn.functional as F
 from torch.distributions.dirichlet import Dirichlet
 from typing import Union
+import logging
+
+logging.basicConfig(level=logging.INFO)
 
 # import os
 # os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'
@@ -103,7 +106,7 @@ class GenerativeModel:
         # Store histories for learning -----------------------------------------
         self.o_history = []  # Observations (opponent actions) history
         self.q_s_history = []  # Beliefs (opponent policies) history
-        self.u_history = []  # Actions (ego) history
+        # NOTE: u_history is at the agent level (self.agent.u_history)
 
         # Agents values (change at each time step) -----------------------------
         self.u = torch.multinomial(self.E, 1).item()  # Starting action randomly sampled according to habits
@@ -167,7 +170,9 @@ class GenerativeModel:
             '''
             # Ego factor
             factor_idx = 0
-            self.q_s[factor_idx] = self.q_u.clone().detach()  # Ego factor is the previous timestep's policy
+            self.q_s[factor_idx] = self.q_u.clone().detach()  # Ego factor is the previous timestep's policy 
+            # FIXME: not actually updating this from upstream (the agent)?
+            print('WARN: Proprioception not fully implemented. Not updating q_u at the generative model level.')
             self.theta[factor_idx] = torch.zeros_like(self.theta[factor_idx])  # PLACEHOLDER
             self.VFE[factor_idx] = 0  # PLACEHOLDER
             self.entropy[factor_idx] = 0  # PLACEHOLDER
@@ -322,7 +327,7 @@ class GenerativeModel:
                 f"{ambiguity[ambiguity <= 0]}"
             )
             # Convert any (-TOLERANCE < ambiguity < 0) values to 0
-            ambiguity = torch.clip(ambiguity, min=0.0, max=None)
+            ambiguity = torch.clamp(ambiguity, min=0.0, max=None)
             
             o_pred = q_o_u[factor_idx]  # shape (2, )
             o_pred = o_pred[o_pred > 0]  # Remove zero values
@@ -462,7 +467,7 @@ class GenerativeModel:
         # Convert history to tensors
         self.q_s_history = torch.stack(self.q_s_history)  # Shape: (T, n_agents, n_actions)
         self.o_history = torch.stack(self.o_history)  # Shape: (T, n_agents, n_actions)
-        self.u_history = torch.tensor(self.u_history)  # Shape: (T, )
+        # NOTE: u_history is at the agent level (self.agent.u_history)
     
         # Learn
         if self.agent.A_learning:
@@ -473,7 +478,6 @@ class GenerativeModel:
         # Reset history
         self.q_s_history = []
         self.o_history = []
-        self.u_history = []
 
     def learn_A(self):
 
@@ -651,7 +655,31 @@ class GenerativeModel:
 
         self.B = self.B_params / self.B_params.sum(dim=2, keepdim=True)
 
-
+    # ==========================================================================
+    # Data collection
+    # ==========================================================================
+    def collect_data(self):
+        '''Collect data for plotting and analysis'''
+        # Collect data from the generative model
+        data = {
+            # VFE (perception/inference)
+            'VFE': torch.stack(self.VFE),
+            'accuracy': torch.stack(self.accuracy),
+            'complexity': torch.stack(self.complexity),
+            'energy': torch.stack(self.energy),
+            'entropy': torch.stack(self.entropy),
+            'q_s': self.q_s,
+            # 'theta': self.theta,
+            # EFE (planning/action)
+            'ambiguity': self.EFE_terms[:, 0],
+            'risk': self.EFE_terms[:, 1],
+            'salience': self.EFE_terms[:, 2],
+            'pragmatic_value': self.EFE_terms[:, 3],
+            'novelty': self.EFE_terms[:, 4],
+            'EFE': -self.EFE_terms[:, 2:5].sum(dim=1),
+            'precision': self.gamma,
+        }
+        return data
 
 class NetworkAgent:
 
@@ -743,8 +771,11 @@ class NetworkAgent:
             for game_matrix in game_matrices
         ]
         # FIXME: assumes all games have the same number of actions
-        self.num_actions = num_actions = game_matrices[0].shape[0]  # Number of actions (assuming symmetrical actions)
-        self.num_agents = num_agents = game_matrices[0].ndim  # Number of players (rank of game tensor)
+        try:
+            self.num_actions = num_actions = game_matrices[0].shape[0]  # Number of actions (assuming symmetrical actions)
+            self.num_agents = num_agents = game_matrices[0].ndim  # Number of players (rank of game tensor)
+        except Exception as e:
+            logging.error(f"Error in game matrices (likely due to agent not being connected in the network): {e}")
 
         self.generative_models = [
             GenerativeModel(
@@ -762,31 +793,32 @@ class NetworkAgent:
         self.E = torch.ones(num_actions**policy_length) / num_actions if E_prior is None else E_prior  # Habits 
 
         # Store blanket states history for learning ----------------------------
-        self.o_history = []  # Observations (opponent actions) history
-        self.q_s_history = []  # Beliefs (opponent policies) history
+        # self.o_history = []  # Observations (opponent actions) history
+        # self.q_s_history = []  # Beliefs (opponent policies) history
         self.u_history = []  # Actions (ego) history
         
         # Agents values (change at each time step) -----------------------------
         self.u = torch.multinomial(self.E, 1).item()  # Starting action randomly sampled according to habits
 
-        self.VFE = [None] * num_agents  # Variational Free Energy for each agent (state factor)
-        self.accuracy = [None] * num_agents
-        self.complexity = [None] * num_agents
-        self.energy = [None] * num_agents
-        self.entropy = [None] * num_agents
+        # self.VFE = [None] * num_agents  # Variational Free Energy for each agent (state factor)
+        # self.accuracy = [None] * num_agents
+        # self.complexity = [None] * num_agents
+        # self.energy = [None] * num_agents
+        # self.entropy = [None] * num_agents
         # q(s_j|u_i) Posterior predictive state distribution (for each factor) conditional on action u_i
-        self.q_s_u = torch.empty((num_agents, num_actions, num_actions))  # shape (n_agents, n_actions, n_actions)
+        # self.q_s_u = torch.empty((num_agents, num_actions, num_actions))  # shape (n_agents, n_actions, n_actions)
 
-        self.EFE = torch.zeros(num_actions)  # Expected Free Energy (for each possible action)
-        self.EFE_terms = torch.zeros((num_actions**policy_length, policy_length, 5))  # Store ambiguity, risk, salience, pragmatic value, novelty for the current time step
+        # self.EFE = torch.zeros(num_actions)  # Expected Free Energy (for each possible action)
+        # self.EFE_terms = torch.zeros((num_actions**policy_length, policy_length, 5))  # Store ambiguity, risk, salience, pragmatic value, novelty for the current time step
         self.q_u = torch.zeros(num_actions)  # q(u_i) Policy of ego (self) agent
         
-        self.expected_EFE = None  # Expected EFE (under current policy q(u)): <G> = E_q(u)[ G[u] ]
+        # self.expected_EFE = None  # Expected EFE (under current policy q(u)): <G> = E_q(u)[ G[u] ]
+
+        self.generative_models_data = None  # Data collection for generative models
 
     # ==========================================================================
     # Summaries
     # ==========================================================================
-
     def __repr__(self):
         return (f"Agent(id={self.id!r}, beta_1={self.beta_1}, decay={self.decay}, "
                 f"gamma={self.gamma:.3f}, game_matrix_shape={self.game_matrix.shape}, "
@@ -879,6 +911,7 @@ class NetworkAgent:
         EFE_per_game = torch.empty((len(self.generative_models), self.num_actions))  # shape: (n_neighbours, n_actions)
         for idx, generative_model in enumerate(self.generative_models):
             EFEs, EFE_terms, policies = generative_model.collect_policies()
+            generative_model.EFE_terms = EFE_terms
 
             EFE_policies = EFEs.sum(dim=1)
             gammas_per_game[idx] = generative_model.gamma
@@ -917,7 +950,6 @@ class NetworkAgent:
     # ==========================================================================
     # Learning
     # ==========================================================================
-
     def learn(self):
         '''Update generative models.
         
@@ -935,3 +967,14 @@ class NetworkAgent:
                 -self.learning_offset, 
                 self.learning_offset
             )  # Renew random offset
+    
+    # ==========================================================================
+    # Data collection
+    # ==========================================================================
+    def collect_data(self):
+        '''Collect data for plotting and analysis'''
+        # Collect data from the generative model
+        self.generative_models_data = [
+            generative_model.collect_data()
+            for generative_model in self.generative_models
+        ]

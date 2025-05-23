@@ -11,6 +11,7 @@ from datetime import datetime
 import git
 import logging
 from typing import Union
+from tqdm import tqdm
 
 import sys
 sys.path.append('../')
@@ -399,6 +400,7 @@ class IteratedNetworkGame:
                 # 'q_s',
                 'q_u', 
                 'u', 
+                'generative_models_data',
                 # 'A', 
                 # 'B',
                 # 'payoff',
@@ -419,16 +421,17 @@ class IteratedNetworkGame:
 
         # Run simulation ---------------------------------------------------------------
         logging.info(f'Simulation started with seed {self.seed}')
-        logging.info(f't=0/{T}')
-        for t in range(T):
+        for t in tqdm(range(T), desc='Simulation progress', unit='steps'):
+        # logging.info(f't=0/{T}')
+        # for t in range(T):
 
             # # Print summary for each agent -------------------------------------------
-            if t % 200 == 0:
-                logging.info(f't={t}/{T}')
-                logging.debug('')
-                for agent in self.agents:
-                    logging.debug(agent)
-                    logging.debug("-" * 40)  
+            # if t % 200 == 0:
+            #     logging.info(f't={t}/{T}')
+            #     logging.debug('')
+            #     for agent in self.agents:
+            #         logging.debug(agent)
+            #         logging.debug("-" * 40)  
             
             # Iterated game logic ------------------------------------------------------
             # Select actions for all agents
@@ -439,11 +442,9 @@ class IteratedNetworkGame:
             for agent in self.agents:
                 # Get neighbors of the agent in the network
                 neighbours = list(self.network.neighbors(agent.id))  # TODO: can we guarantee the order of the neighbors?
-                # TODO? neighbours = [n for n in neighbours if n != agent.id]  # Remove self from neighbors
                 # Egocentric observation
                 o_ego = u_all_one_hot[agent.id].unsqueeze(0)  # Shape (1, n_actions)
                 o_neighbours = u_all_one_hot[neighbours]  # Shape (n_neighbors, n_actions)
-                # o_rest = torch.cat((u_all_one_hot[:agent.id], u_all_one_hot[agent.id+1:]), dim=0)  # Shape (n_agents-1, n_actions)
                 o = torch.cat((o_ego, o_neighbours), dim=0)  # Shape (n_neighbors+1, n_actions)
 
                 # Compute payoffs
@@ -452,6 +453,8 @@ class IteratedNetworkGame:
                 # ]  # Payoff for the selected actions
                 
                 agent.infer_state(o)
+
+                agent.collect_data()  # Collect data from the agent's generative models
 
                 agent.learn()  # Update the agent's model (only does so every agent.learn_every_t_steps steps)
 
@@ -470,7 +473,6 @@ class IteratedNetworkGame:
                         getattr(a, varname) for a in self.agents  # Copy for other types
                     ])
 
-        logging.info(f't={t+1}/{T} Simulation complete')  # hehe
         return variables_history
 
 

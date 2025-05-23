@@ -608,7 +608,7 @@ class Agent:
                 f"{ambiguity[ambiguity <= 0]}"
             )
             # Convert any (-TOLERANCE < ambiguity < 0) values to 0
-            ambiguity = torch.clip(ambiguity, min=0.0, max=None)
+            ambiguity = torch.clamp(ambiguity, min=0.0, max=None)
             
             o_pred = q_o_u[factor_idx]  # shape (2, )
             o_pred = o_pred[o_pred > 0]  # Remove zero values
